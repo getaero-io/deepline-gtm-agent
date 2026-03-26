@@ -122,7 +122,7 @@ def search_prospects(
 
     Returns a list of people with name, title, company, LinkedIn URL, and email (when available).
     """
-    payload: dict = {"per_page": min(limit, 100), "include_similar_titles": True}
+    payload: dict = {"per_page": min(limit, 25), "include_similar_titles": True}
 
     if job_title:
         payload["person_titles"] = [job_title]
@@ -139,19 +139,23 @@ def search_prospects(
     if company_industry:
         payload["q_keywords"] = company_industry
 
-    result = deepline_execute("apollo_search_people", payload)
+    # apollo_search_people_with_match auto-enriches each result → full name + LinkedIn
+    result = deepline_execute("apollo_search_people_with_match", payload)
     people = result.get("people", [])[:limit]
     return {
-        "provider": "apollo",
+        "provider": "apollo (search_people_with_match)",
+        "note": "Full names and LinkedIn URLs returned via Apollo enrichment. Last names are obfuscated on free-tier results where Apollo hasn't matched a full profile.",
+        "total_in_apollo": result.get("pagination", {}).get("total_entries"),
         "count": len(people),
         "prospects": [
             {
-                "name": f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+                "name": p.get("name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
                 "title": p.get("title"),
-                "company": p.get("organization_name"),
+                "company": p.get("organization_name") or (p.get("organization") or {}).get("name"),
                 "linkedin_url": p.get("linkedin_url"),
                 "email": p.get("email"),
                 "location": p.get("city"),
+                "has_email": p.get("email") is not None,
             }
             for p in people
         ],
