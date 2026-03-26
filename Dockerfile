@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Deepline CLI from prod
-RUN bash <(curl -sS https://code.deepline.com/api/v2/cli/install) --yes
+# Install Deepline CLI from prod (process substitution requires bash -c)
+RUN bash -c 'bash <(curl -sS https://code.deepline.com/api/v2/cli/install) --yes'
 
 # Make sure deepline is on PATH
 ENV PATH="/root/.local/bin:$PATH"
