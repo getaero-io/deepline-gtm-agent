@@ -80,7 +80,17 @@ async def chat(req: ChatRequest):
 
     try:
         result = await agent.ainvoke({"messages": messages}, config=config or None)
-        reply = result["messages"][-1].content
+        last = result["messages"][-1]
+        content = last.content
+        # content can be a string or a list of content blocks
+        if isinstance(content, list):
+            reply = "".join(
+                block["text"] if isinstance(block, dict) else str(block)
+                for block in content
+                if not isinstance(block, dict) or block.get("type") == "text"
+            )
+        else:
+            reply = str(content)
         return ChatResponse(message=reply, thread_id=req.thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
