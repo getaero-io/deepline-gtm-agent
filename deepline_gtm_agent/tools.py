@@ -232,13 +232,16 @@ def verify_email(email: str) -> dict:
     """
     try:
         result = deepline_execute("leadmagic_email_validation", {"email": email})
-        status = result.get("status", "unknown")
+        # LeadMagic returns "email_status" field (not "status")
+        status = result.get("email_status", result.get("status", "unknown"))
         return {
             "provider": "leadmagic",
             "email": email,
             "valid": status == "valid",
             "status": status,
             "safe_to_send": status == "valid",
+            "mx_provider": result.get("mx_provider"),
+            "company_name": result.get("company_name"),
         }
     except Exception:
         pass
