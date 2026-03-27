@@ -103,6 +103,34 @@ def enrich_person(
 # ---------------------------------------------------------------------------
 
 
+def _employee_ranges(size_min: Optional[int], size_max: Optional[int]) -> list[str]:
+    """Map integer headcount range to Dropleads bucket strings."""
+    buckets = [
+        (1, 10, "1-10"),
+        (11, 50, "11-50"),
+        (51, 200, "51-200"),
+        (201, 500, "201-500"),
+        (501, 1000, "501-1000"),
+        (1001, 5000, "1001-5000"),
+        (5001, 10000, "5001-10000"),
+        (10001, 10**9, "10000+"),
+    ]
+    lo = size_min or 1
+    hi = size_max or 10**9
+    return [label for (blo, bhi, label) in buckets if blo <= hi and bhi >= lo]
+
+
+_SENIORITY_MAP = {
+    "owner": "C-Level",
+    "founder": "C-Level",
+    "c_suite": "C-Level",
+    "vp": "VP",
+    "director": "Director",
+    "manager": "Manager",
+    "individual_contributor": "Senior",
+}
+
+
 def search_prospects(
     job_title: Optional[str] = None,
     job_level: Optional[str] = None,
@@ -111,57 +139,97 @@ def search_prospects(
     person_location: Optional[str] = None,
     company_size_min: Optional[int] = None,
     company_size_max: Optional[int] = None,
-    keywords: Optional[str] = None,
+    company_industry: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
     """
     Search for people (prospects) matching ICP criteria.
 
+    Uses Dropleads (free) as primary provider. Falls through to Deepline Native Prospector
+    when a company_domain is provided and more depth is needed.
+
     job_level accepted values: owner, founder, c_suite, vp, director, manager, individual_contributor.
     company_size_min / company_size_max: integer employee counts (e.g. 200, 500).
-    keywords: optional free-text keyword search (searches across name, title, bio — use sparingly;
-              do NOT use for industry filtering as Apollo requires specific tag IDs for industry).
+    company_industry: plain-language industry (e.g. "Software", "SaaS", "Healthcare").
+    person_location: country or US state name (e.g. "United States", "California").
 
     Returns a list of people with name, title, company, LinkedIn URL, and email (when available).
     """
-    payload: dict = {"per_page": min(limit, 25), "include_similar_titles": True}
+    # --- Dropleads primary search ---
+    filters: dict = {}
 
     if job_title:
-        payload["person_titles"] = [job_title]
+        filters["jobTitles"] = [job_title]
     if job_level:
-        payload["person_seniorities"] = [job_level]
+        dl_seniority = _SENIORITY_MAP.get(job_level)
+        if dl_seniority:
+            filters["seniority"] = [dl_seniority]
     if company_domain:
-        payload["q_organization_domains_list"] = [company_domain]
+        filters["companyDomains"] = [company_domain]
+    elif company_name:
+        filters["companyNames"] = [company_name]
     if person_location:
-        payload["person_locations"] = [person_location]
+        filters["personalCountries"] = {"include": [person_location]}
     if company_size_min or company_size_max:
-        lo = company_size_min or 1
-        hi = company_size_max or 100_000
-        payload["organization_num_employees_ranges"] = [f"{lo},{hi}"]
-    if keywords:
-        payload["q_keywords"] = keywords
+        filters["employeeRanges"] = _employee_ranges(company_size_min, company_size_max)
+    if company_industry:
+        filters["industries"] = [company_industry]
 
-    # apollo_search_people_with_match auto-enriches each result → full name + LinkedIn
-    result = deepline_execute("apollo_search_people_with_match", payload)
-    people = result.get("people", [])[:limit]
-    return {
-        "provider": "apollo (search_people_with_match)",
-        "note": "Full names and LinkedIn URLs returned via Apollo enrichment. Last names are obfuscated on free-tier results where Apollo hasn't matched a full profile.",
-        "total_in_apollo": result.get("pagination", {}).get("total_entries"),
-        "count": len(people),
-        "prospects": [
-            {
-                "name": p.get("name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
-                "title": p.get("title"),
-                "company": p.get("organization_name") or (p.get("organization") or {}).get("name"),
-                "linkedin_url": p.get("linkedin_url"),
-                "email": p.get("email"),
-                "location": p.get("city"),
-                "has_email": p.get("email") is not None,
+    try:
+        result = deepline_execute("dropleads_search_people", {
+            "filters": filters,
+            "pagination": {"page": 1, "limit": min(limit, 25)},
+        })
+        leads = (result.get("data") or result).get("leads", [])[:limit]
+        if leads:
+            return {
+                "provider": "dropleads",
+                "total": (result.get("data") or result).get("total", len(leads)),
+                "count": len(leads),
+                "prospects": [
+                    {
+                        "name": lead.get("fullName"),
+                        "title": lead.get("title"),
+                        "company": lead.get("companyName"),
+                        "linkedin_url": lead.get("linkedinUrl"),
+                        "email": lead.get("email") or None,
+                        "location": lead.get("location"),
+                        "company_size": lead.get("companySize"),
+                        "industry": lead.get("industry"),
+                        "has_email": bool(lead.get("email")),
+                    }
+                    for lead in leads
+                ],
             }
-            for p in people
-        ],
-    }
+    except Exception:
+        pass
+
+    # --- Deepline Native Prospector fallback (domain-specific, has email) ---
+    if company_domain and job_title:
+        try:
+            result = deepline_execute("deepline_native_prospector", {
+                "domain": company_domain,
+                "title_filter": job_title,
+                "limit": min(limit, 25),
+            })
+            contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
+            return {
+                "provider": "deepline_native_prospector",
+                "count": len(contacts),
+                "prospects": [
+                    {
+                        "email": c.get("email"),
+                        "linkedin_url": c.get("linkedin"),
+                        "phone": c.get("phone"),
+                        "has_email": bool(c.get("email")),
+                    }
+                    for c in contacts
+                ],
+            }
+        except Exception:
+            pass
+
+    return {"error": "No results found from Dropleads or Deepline Native Prospector.", "filters_used": filters}
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +285,50 @@ def research_company(
         except Exception:
             pass
 
+    # Exa web research fallback — live web sources, more current than database providers
+    try:
+        query = domain or company_name
+        result = deepline_execute("exa_research", {
+            "instructions": f"Research the company at {query}. Return: full company name, industry, headcount, total funding raised, HQ location, founding year, what the company does (2-3 sentences), notable customers or use cases, and any recent news or signals (hiring, fundraising, expansion).",
+            "model": "exa-research-fast",
+        })
+        summary = (result.get("data") or result).get("output", {})
+        if summary:
+            return {"provider": "exa_research (web)", "domain": domain, "company_name": company_name, "summary": summary}
+    except Exception:
+        pass
+
     return {"error": f"Could not find company data for {domain or company_name}"}
+
+
+# ---------------------------------------------------------------------------
+# Web research (open-ended)
+# ---------------------------------------------------------------------------
+
+
+def web_research(query: str) -> dict:
+    """
+    Run open-ended web research via Exa. Use for:
+    - Company intelligence not covered by firmographic databases
+    - Finding people by name/role when database lookup fails
+    - Recent news, funding rounds, job postings, product launches
+    - Any question requiring live web data
+
+    Returns a structured research summary with citations.
+    """
+    try:
+        result = deepline_execute("exa_research", {
+            "instructions": query,
+            "model": "exa-research-fast",
+        })
+        data = result.get("data") or result
+        return {
+            "provider": "exa_research",
+            "query": query,
+            "summary": data.get("output", data),
+        }
+    except Exception as e:
+        return {"error": str(e), "query": query}
 
 
 # ---------------------------------------------------------------------------
