@@ -236,15 +236,17 @@ def verify_email(email: str) -> dict:
         result = deepline_execute("leadmagic_email_validation", {"email": email})
         # LeadMagic returns "email_status" field (not "status")
         status = result.get("email_status", result.get("status", "unknown"))
-        return {
-            "provider": "leadmagic",
-            "email": email,
-            "valid": status == "valid",
-            "status": status,
-            "safe_to_send": status == "valid",
-            "mx_provider": result.get("mx_provider"),
-            "company_name": result.get("company_name"),
-        }
+        if status != "unknown":
+            return {
+                "provider": "leadmagic",
+                "email": email,
+                "valid": status == "valid",
+                "status": status,
+                "safe_to_send": status == "valid",
+                "mx_provider": result.get("mx_provider"),
+                "company_name": result.get("company_name"),
+            }
+        # Fall through to ZeroBounce if LeadMagic returns unknown
     except Exception:
         pass
 
