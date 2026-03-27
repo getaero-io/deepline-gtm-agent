@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from deepline_gtm_agent import create_gtm_agent
+from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.slack import (
     handle_slack_event,
     verify_slack_signature,
@@ -38,17 +39,32 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Agent singleton
+# Agent singleton — built once at startup with live skill docs
 # ---------------------------------------------------------------------------
 
 _agent = None
+_skill_docs: str = ""
+
+
+@app.on_event("startup")
+async def startup():
+    """Fetch Deepline skill docs at startup so the agent has full provider guidance."""
+    global _skill_docs, _agent
+    logger.info("Fetching Deepline skill docs...")
+    _skill_docs = await load_skill_docs()
+    doc_count = _skill_docs.count("## Skill doc:")
+    logger.info("Loaded %d skill docs (%.1f KB)", doc_count, len(_skill_docs) / 1024)
+    # Pre-build the agent so first request isn't slow
+    model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
+    _agent = create_gtm_agent(model=model, skill_docs=_skill_docs or None)
+    logger.info("Agent ready (model=%s, skills=%s)", model, "loaded" if _skill_docs else "unavailable")
 
 
 def get_agent():
     global _agent
     if _agent is None:
         model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
-        _agent = create_gtm_agent(model=model)
+        _agent = create_gtm_agent(model=model, skill_docs=_skill_docs or None)
     return _agent
 
 
@@ -94,11 +110,11 @@ class ChatResponse(BaseModel):
 
 @app.get("/health")
 async def health():
-    slack_configured = bool(SLACK_BOT_TOKEN)
     return {
         "status": "ok",
         "agent": "deepline-gtm-agent",
-        "slack": "configured" if slack_configured else "not configured",
+        "slack": "configured" if SLACK_BOT_TOKEN else "not configured",
+        "skills": f"{_skill_docs.count('## Skill doc:')} docs loaded" if _skill_docs else "not loaded",
     }
 
 

@@ -7,6 +7,7 @@ from deepagents import create_deep_agent
 from langchain_core.tools import BaseTool
 
 from deepline_gtm_agent.prompts import GTM_SYSTEM_PROMPT
+from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.tools import (
     enrich_person,
     search_prospects,
@@ -27,10 +28,20 @@ DEEPLINE_GTM_TOOLS: list[Callable] = [
 ]
 
 
+async def build_system_prompt(base: Optional[str] = None) -> str:
+    """Fetch live skill docs from Deepline CDN and append to the base prompt."""
+    skill_docs = await load_skill_docs()
+    base_prompt = base or GTM_SYSTEM_PROMPT
+    if skill_docs:
+        return f"{base_prompt}\n\n---\n\n# Deepline Skill Documentation\n\nThe following docs are fetched live from Deepline's skill CDN. They contain validated provider schemas, waterfall patterns, and known pitfalls.\n\n{skill_docs}"
+    return base_prompt
+
+
 def create_gtm_agent(
     model: str = "anthropic:claude-opus-4-6",
     system_prompt: Optional[str] = None,
     extra_tools: Optional[Sequence[BaseTool | Callable | dict[str, Any]]] = None,
+    skill_docs: Optional[str] = None,
     **kwargs: Any,
 ):
     """
@@ -64,9 +75,21 @@ def create_gtm_agent(
     if extra_tools:
         all_tools.extend(extra_tools)
 
+    # Build final system prompt: base + injected skill docs (if pre-fetched)
+    final_prompt = system_prompt or GTM_SYSTEM_PROMPT
+    if skill_docs:
+        final_prompt = (
+            f"{final_prompt}\n\n---\n\n"
+            "# Deepline Skill Documentation\n\n"
+            "The following docs are fetched live from Deepline's skill CDN. "
+            "They contain validated provider schemas, waterfall patterns, and known pitfalls. "
+            "Treat them as authoritative.\n\n"
+            f"{skill_docs}"
+        )
+
     return create_deep_agent(
         model=model,
         tools=all_tools,
-        system_prompt=system_prompt or GTM_SYSTEM_PROMPT,
+        system_prompt=final_prompt,
         **kwargs,
     )
