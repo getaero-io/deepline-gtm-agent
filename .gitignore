@@ -1,7 +1,40 @@
 __pycache__/
 *.pyc
 *.pyo
-.env
 *.egg-info/
 dist/
 build/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production.local
+
+# Python virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Credentials (explicit safety net)
+*.key
+*.pem
+credentials.json
+secrets.json
