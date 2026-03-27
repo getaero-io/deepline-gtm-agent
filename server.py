@@ -1,21 +1,32 @@
 """
-FastAPI server that exposes the GTM agent as a streaming HTTP endpoint.
+FastAPI server — Deepline GTM Agent
 
-POST /chat           — single-turn chat, returns full response
-POST /chat/stream    — streaming SSE response
-GET  /health         — health check
+Endpoints:
+  GET  /health          — health check
+  POST /chat            — single-turn chat, full response
+  POST /chat/stream     — streaming SSE
+  POST /slack/events    — Slack Events API webhook (DMs + @mentions)
 """
 
 import json
+import logging
 import os
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from deepline_gtm_agent import create_gtm_agent
+from deepline_gtm_agent.slack import (
+    handle_slack_event,
+    verify_slack_signature,
+    SLACK_BOT_TOKEN,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Deepline GTM Agent", version="0.1.0")
 
@@ -26,7 +37,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Build agent once at startup
+# ---------------------------------------------------------------------------
+# Agent singleton
+# ---------------------------------------------------------------------------
+
 _agent = None
 
 
@@ -38,13 +52,28 @@ def get_agent():
     return _agent
 
 
+async def run_agent(messages: list[dict]) -> str:
+    """Run the GTM agent and return a plain text reply."""
+    agent = get_agent()
+    result = await agent.ainvoke({"messages": messages})
+    last = result["messages"][-1]
+    content = last.content
+    if isinstance(content, list):
+        return "".join(
+            block["text"] if isinstance(block, dict) else str(block)
+            for block in content
+            if not isinstance(block, dict) or block.get("type") == "text"
+        )
+    return str(content)
+
+
 # ---------------------------------------------------------------------------
-# Request/response schemas
+# Schemas
 # ---------------------------------------------------------------------------
 
 
 class Message(BaseModel):
-    role: str  # "user" | "assistant"
+    role: str
     content: str
 
 
@@ -59,38 +88,25 @@ class ChatResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# HTTP chat endpoints
 # ---------------------------------------------------------------------------
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "agent": "deepline-gtm-agent"}
+    slack_configured = bool(SLACK_BOT_TOKEN)
+    return {
+        "status": "ok",
+        "agent": "deepline-gtm-agent",
+        "slack": "configured" if slack_configured else "not configured",
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """Single-turn chat — waits for full response before returning."""
-    agent = get_agent()
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
-
-    config = {}
-    if req.thread_id:
-        config["configurable"] = {"thread_id": req.thread_id}
-
     try:
-        result = await agent.ainvoke({"messages": messages}, config=config or None)
-        last = result["messages"][-1]
-        content = last.content
-        # content can be a string or a list of content blocks
-        if isinstance(content, list):
-            reply = "".join(
-                block["text"] if isinstance(block, dict) else str(block)
-                for block in content
-                if not isinstance(block, dict) or block.get("type") == "text"
-            )
-        else:
-            reply = str(content)
+        reply = await run_agent(messages)
         return ChatResponse(message=reply, thread_id=req.thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -98,7 +114,6 @@ async def chat(req: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
-    """Streaming SSE endpoint — yields tokens as they arrive."""
     agent = get_agent()
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
@@ -113,20 +128,16 @@ async def chat_stream(req: ChatRequest):
                 config=config or None,
                 stream_mode="messages",
             ):
-                # chunk is (message, metadata) tuple in messages stream mode
                 if isinstance(chunk, tuple):
-                    msg, meta = chunk
+                    msg, _ = chunk
                     if hasattr(msg, "content") and msg.content:
                         content = msg.content
                         if isinstance(content, list):
-                            # Multi-part content block
                             for block in content:
                                 if isinstance(block, dict) and block.get("type") == "text":
-                                    data = json.dumps({"token": block["text"]})
-                                    yield f"data: {data}\n\n"
+                                    yield f"data: {json.dumps({'token': block['text']})}\n\n"
                         else:
-                            data = json.dumps({"token": str(content)})
-                            yield f"data: {data}\n\n"
+                            yield f"data: {json.dumps({'token': str(content)})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -136,6 +147,53 @@ async def chat_stream(req: ChatRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Slack Events API
+# ---------------------------------------------------------------------------
+
+
+@app.post("/slack/events")
+async def slack_events(request: Request, background_tasks: BackgroundTasks):
+    """
+    Slack Events API webhook.
+
+    Handles:
+      - url_verification challenge (sent once during app setup)
+      - app_mention  — bot @-mentioned in a channel
+      - message.im   — DM sent directly to the bot
+
+    Security: verifies X-Slack-Signature on every request.
+    Responds with 200 immediately; runs agent in background to beat Slack's 3s timeout.
+    """
+    body = await request.body()
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+
+    if not verify_slack_signature(body, timestamp, signature):
+        logger.warning("Slack signature verification failed")
+        return Response(status_code=403, content="Invalid signature")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return Response(status_code=400, content="Bad JSON")
+
+    # ── URL verification (one-time during app setup) ──────────────────────
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload["challenge"]}
+
+    # ── Event callback ────────────────────────────────────────────────────
+    if payload.get("type") == "event_callback":
+        event_type = payload.get("event", {}).get("type", "")
+
+        if event_type in ("app_mention", "message"):
+            # Kick off async processing — return 200 to Slack immediately
+            background_tasks.add_task(handle_slack_event, payload, run_agent)
+
+    # Always return 200 so Slack doesn't retry
+    return Response(status_code=200)
 
 
 if __name__ == "__main__":
