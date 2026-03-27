@@ -109,9 +109,9 @@ def search_prospects(
     company_name: Optional[str] = None,
     company_domain: Optional[str] = None,
     person_location: Optional[str] = None,
-    company_industry: Optional[str] = None,
     company_size_min: Optional[int] = None,
     company_size_max: Optional[int] = None,
+    keywords: Optional[str] = None,
     limit: int = 10,
 ) -> dict:
     """
@@ -119,6 +119,8 @@ def search_prospects(
 
     job_level accepted values: owner, founder, c_suite, vp, director, manager, individual_contributor.
     company_size_min / company_size_max: integer employee counts (e.g. 200, 500).
+    keywords: optional free-text keyword search (searches across name, title, bio — use sparingly;
+              do NOT use for industry filtering as Apollo requires specific tag IDs for industry).
 
     Returns a list of people with name, title, company, LinkedIn URL, and email (when available).
     """
@@ -136,8 +138,8 @@ def search_prospects(
         lo = company_size_min or 1
         hi = company_size_max or 100_000
         payload["organization_num_employees_ranges"] = [f"{lo},{hi}"]
-    if company_industry:
-        payload["q_keywords"] = company_industry
+    if keywords:
+        payload["q_keywords"] = keywords
 
     # apollo_search_people_with_match auto-enriches each result → full name + LinkedIn
     result = deepline_execute("apollo_search_people_with_match", payload)

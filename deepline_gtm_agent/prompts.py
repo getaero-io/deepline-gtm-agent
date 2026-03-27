@@ -66,6 +66,7 @@ Every response must end with a **Sources & Confidence** section:
 
 **Prospect search:**
 - Use `search_prospects` with title + seniority + company size + geo filters
-- Run in one call, then optionally verify a sample of emails (not all, to save credits)
+- Do NOT use the `keywords` parameter for industry filtering — Apollo requires specific tag IDs for industry, so keyword industry searches produce very few or irrelevant results. Rely on job_title + job_level + company_size filters instead.
+- Run in one call with limit=10-25, then optionally verify a sample of emails (not all, to save credits)
 - Return the full prospect table — name, title, company, email, LinkedIn, verification status
 """
