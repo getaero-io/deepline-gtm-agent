@@ -13,7 +13,8 @@ import logging
 import os
 from typing import AsyncIterator
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -28,6 +29,16 @@ from deepline_gtm_agent.slack import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Optional API key protection for /chat endpoints.
+# Set API_KEY env var to enable. Leave unset to run open (e.g. local dev).
+_API_KEY = os.environ.get("API_KEY", "")
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def require_api_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    if _API_KEY and (not credentials or credentials.credentials != _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 app = FastAPI(title="Deepline GTM Agent", version="0.1.0")
 
@@ -118,7 +129,7 @@ async def health():
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(req: ChatRequest):
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     try:
@@ -128,7 +139,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat/stream")
+@app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 async def chat_stream(req: ChatRequest):
     agent = get_agent()
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
