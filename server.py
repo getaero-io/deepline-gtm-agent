@@ -16,14 +16,18 @@ from typing import AsyncIterator
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from deepline_gtm_agent import create_gtm_agent
 from deepline_gtm_agent.skills import load_skill_docs
+from deepline_gtm_agent.dynamic_tools import load_tool_catalog
+import httpx
+
 from deepline_gtm_agent.slack import (
     handle_slack_event,
     verify_slack_signature,
+    register_workspace_token,
     SLACK_BOT_TOKEN,
 )
 
@@ -42,11 +46,16 @@ async def require_api_key(credentials: HTTPAuthorizationCredentials = Depends(_b
 
 app = FastAPI(title="Deepline GTM Agent", version="0.1.0")
 
+# CORS: defaults to open for local dev.
+# Set CORS_ORIGINS="https://your-app.com,https://other.com" in production.
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ---------------------------------------------------------------------------
@@ -55,27 +64,60 @@ app.add_middleware(
 
 _agent = None
 _skill_docs: str = ""
+_tool_catalog: list[dict] = []
 
 
 @app.on_event("startup")
 async def startup():
-    """Fetch Deepline skill docs at startup so the agent has full provider guidance."""
-    global _skill_docs, _agent
-    logger.info("Fetching Deepline skill docs...")
-    _skill_docs = await load_skill_docs()
+    """
+    Fetch Deepline skill docs + tool catalog at startup.
+
+    Runs concurrently so startup is fast even with 30+ docs.
+    Both are cached to disk so subsequent cold starts are instant.
+    """
+    global _skill_docs, _tool_catalog, _agent
+    import asyncio
+
+    logger.info("Loading Deepline skill docs and tool catalog...")
+
+    # Load skill docs (async HTTP) and tool catalog (sync subprocess) concurrently
+    skill_task = asyncio.create_task(load_skill_docs())
+
+    # Catalog load is sync (subprocess), run in thread pool so it doesn't block
+    loop = asyncio.get_event_loop()
+    catalog_task = loop.run_in_executor(None, load_tool_catalog)
+
+    _skill_docs, _tool_catalog = await asyncio.gather(skill_task, catalog_task)
+
     doc_count = _skill_docs.count("## Skill doc:")
-    logger.info("Loaded %d skill docs (%.1f KB)", doc_count, len(_skill_docs) / 1024)
-    # Pre-build the agent so first request isn't slow
+    logger.info(
+        "Loaded %d skill docs (%.1f KB) and %d tools in catalog",
+        doc_count, len(_skill_docs) / 1024, len(_tool_catalog),
+    )
+
     model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
-    _agent = create_gtm_agent(model=model, skill_docs=_skill_docs or None)
-    logger.info("Agent ready (model=%s, skills=%s)", model, "loaded" if _skill_docs else "unavailable")
+    _agent = create_gtm_agent(
+        model=model,
+        skill_docs=_skill_docs or None,
+        tool_catalog=_tool_catalog or None,
+    )
+    logger.info(
+        "Agent ready (model=%s, skills=%s, tools=%d)",
+        model,
+        "loaded" if _skill_docs else "unavailable",
+        len(_tool_catalog),
+    )
 
 
 def get_agent():
     global _agent
     if _agent is None:
         model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
-        _agent = create_gtm_agent(model=model, skill_docs=_skill_docs or None)
+        _agent = create_gtm_agent(
+            model=model,
+            skill_docs=_skill_docs or None,
+            tool_catalog=_tool_catalog or None,
+        )
     return _agent
 
 
@@ -126,6 +168,7 @@ async def health():
         "agent": "deepline-gtm-agent",
         "slack": "configured" if SLACK_BOT_TOKEN else "not configured",
         "skills": f"{_skill_docs.count('## Skill doc:')} docs loaded" if _skill_docs else "not loaded",
+        "tools": f"{len(_tool_catalog)} Deepline tools registered" if _tool_catalog else "catalog not loaded",
     }
 
 
@@ -195,12 +238,6 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
     Responds with 200 immediately; runs agent in background to beat Slack's 3s timeout.
     """
     body = await request.body()
-    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-    signature = request.headers.get("X-Slack-Signature", "")
-
-    if not verify_slack_signature(body, timestamp, signature):
-        logger.warning("Slack signature verification failed")
-        return Response(status_code=403, content="Invalid signature")
 
     try:
         payload = json.loads(body)
@@ -208,19 +245,93 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
         return Response(status_code=400, content="Bad JSON")
 
     # ── URL verification (one-time during app setup) ──────────────────────
+    # Respond before signature check — the challenge handshake IS the verification.
     if payload.get("type") == "url_verification":
         return {"challenge": payload["challenge"]}
+
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+
+    if not verify_slack_signature(body, timestamp, signature):
+        logger.warning("Slack signature verification failed")
+        return Response(status_code=403, content="Invalid signature")
 
     # ── Event callback ────────────────────────────────────────────────────
     if payload.get("type") == "event_callback":
         event_type = payload.get("event", {}).get("type", "")
 
-        if event_type in ("app_mention", "message"):
-            # Kick off async processing — return 200 to Slack immediately
+        event = payload.get("event", {})
+        channel_type = event.get("channel_type", "")
+        # app_mention  → @mention in a channel
+        # message + im → DM to the bot
+        # Skip plain "message" events in channels — they duplicate app_mention
+        if event_type == "app_mention" or (event_type == "message" and channel_type == "im"):
             background_tasks.add_task(handle_slack_event, payload, run_agent)
 
     # Always return 200 so Slack doesn't retry
     return Response(status_code=200)
+
+
+@app.get("/slack/oauth_redirect")
+async def slack_oauth_redirect(code: str = None, error: str = None):
+    """
+    Slack OAuth redirect handler.
+
+    Slack sends the user here after they install the app. This endpoint exchanges
+    the short-lived code for a bot token using SLACK_CLIENT_ID + SLACK_CLIENT_SECRET.
+
+    Required env vars: SLACK_CLIENT_ID, SLACK_CLIENT_SECRET
+    """
+    if error:
+        return HTMLResponse(f"<h2>OAuth error</h2><p>{error}</p>", status_code=400)
+
+    if not code:
+        return HTMLResponse("<h2>Missing code</h2><p>No OAuth code in request.</p>", status_code=400)
+
+    client_id = os.environ.get("SLACK_CLIENT_ID", "")
+    client_secret = os.environ.get("SLACK_CLIENT_SECRET", "")
+
+    if not client_id or not client_secret:
+        return HTMLResponse(
+            "<h2>Not configured</h2>"
+            "<p>Set <code>SLACK_CLIENT_ID</code> and <code>SLACK_CLIENT_SECRET</code> env vars, then reinstall the app.</p>",
+            status_code=500,
+        )
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={"client_id": client_id, "client_secret": client_secret, "code": code},
+            timeout=10,
+        )
+
+    data = resp.json()
+    if not data.get("ok"):
+        return HTMLResponse(
+            f"<h2>OAuth failed</h2><p>{data.get('error', 'unknown error')}</p>",
+            status_code=400,
+        )
+
+    bot_token = data.get("access_token", "")
+    team_id = data.get("team", {}).get("id", "")
+    team = data.get("team", {}).get("name", "your workspace")
+
+    # Register this token so the bot responds in the right workspace immediately
+    if team_id and bot_token:
+        register_workspace_token(team_id, bot_token)
+
+    logger.info("Slack OAuth success for workspace: %s (%s)", team, team_id)
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html><head><title>Deepline GTM Agent — Slack Connected</title>
+<style>body{{font-family:system-ui,sans-serif;max-width:600px;margin:60px auto;padding:0 20px;}}
+code{{background:#f4f4f4;padding:4px 8px;border-radius:4px;font-size:14px;word-break:break-all;}}</style>
+</head><body>
+<h2>✅ Slack connected — {team}</h2>
+<p>Set this as your <code>SLACK_BOT_TOKEN</code> environment variable in Railway:</p>
+<pre><code>{bot_token}</code></pre>
+<p>Then redeploy. The bot will be live once the deploy completes.</p>
+</body></html>""")
 
 
 if __name__ == "__main__":

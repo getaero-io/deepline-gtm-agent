@@ -2,14 +2,18 @@
 GTM agent factory using the Deep Agents framework.
 """
 
+import logging
 from typing import Optional, Sequence, Any, Callable
+
 from deepagents import create_deep_agent
 from langchain_core.tools import BaseTool
 
 from deepline_gtm_agent.prompts import GTM_SYSTEM_PROMPT
 from deepline_gtm_agent.skills import load_skill_docs
+from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
 from deepline_gtm_agent.tools import (
     enrich_person,
+    waterfall_enrich,
     search_prospects,
     research_company,
     web_research,
@@ -18,8 +22,12 @@ from deepline_gtm_agent.tools import (
     search_companies,
 )
 
-# All Deepline GTM tools available to the agent
-DEEPLINE_GTM_TOOLS: list[Callable] = [
+logger = logging.getLogger(__name__)
+
+# High-level GTM tools with waterfall logic and smart defaults.
+# These are the primary interface for common GTM operations.
+GTM_HIGH_LEVEL_TOOLS: list[Callable] = [
+    waterfall_enrich,
     enrich_person,
     search_prospects,
     research_company,
@@ -44,19 +52,27 @@ def create_gtm_agent(
     system_prompt: Optional[str] = None,
     extra_tools: Optional[Sequence[BaseTool | Callable | dict[str, Any]]] = None,
     skill_docs: Optional[str] = None,
+    tool_catalog: Optional[list[dict]] = None,
     **kwargs: Any,
 ):
     """
     Create a GTM agent powered by Deepline + Deep Agents.
 
-    The agent has access to 30+ enrichment and outreach providers via Deepline
-    and is prompted to act as a GTM automation specialist.
+    The agent has access to:
+    - 8 high-level GTM tools (waterfall enrichment, prospect search, company research, etc.)
+    - `deepline_call`: a passthrough to all 438+ Deepline integrations (HubSpot, Salesforce,
+      Attio, Instantly, Lemlist, Smartlead, HeyReach, Apollo, Crustdata, Firecrawl, Apify, …)
+
+    The tool catalog is fetched dynamically at startup and cached for 24h, so new Deepline
+    integrations are automatically available without code changes.
 
     Args:
         model: LLM to use. Defaults to Claude Opus 4.6 via LangChain's init_chat_model.
                Also accepts "openai:gpt-4o", "google:gemini-2.0-flash", etc.
         system_prompt: Override the default GTM system prompt.
         extra_tools: Additional tool functions to register alongside Deepline tools.
+        skill_docs: Pre-fetched Deepline skill docs string (injected at startup by server.py).
+        tool_catalog: Pre-fetched Deepline tool catalog list (injected at startup by server.py).
         **kwargs: Forwarded to `create_deep_agent` (e.g. checkpointer, store, debug).
 
     Returns:
@@ -73,7 +89,18 @@ def create_gtm_agent(
         })
         print(result["messages"][-1].content)
     """
-    all_tools: list = list(DEEPLINE_GTM_TOOLS)
+    # Load catalog (use pre-loaded if provided, else fetch now)
+    catalog = tool_catalog
+    if catalog is None:
+        logger.info("Loading Deepline tool catalog...")
+        catalog = load_tool_catalog()
+
+    # Build the deepline_call passthrough with full catalog embedded in description
+    deepline_call_tool = make_deepline_call_tool(catalog)
+    logger.info("deepline_call tool registered (%d tools in catalog)", len(catalog))
+
+    # Assemble all tools
+    all_tools: list = list(GTM_HIGH_LEVEL_TOOLS) + [deepline_call_tool]
     if extra_tools:
         all_tools.extend(extra_tools)
 

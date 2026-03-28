@@ -7,8 +7,11 @@ Each function follows the Deep Agents convention:
 - Returns a dict or str that the agent can reason about
 """
 
+import logging
 from typing import Optional
 from deepline_gtm_agent.deepline import deepline_execute
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +30,7 @@ def enrich_person(
     """
     Enrich a person's contact data: work email, phone, job title, LinkedIn.
 
-    Runs a waterfall across Apollo, Hunter, and Crustdata.
+    Waterfall: Hunter (domain + name) → Crustdata (LinkedIn URL) → Deepline Native Prospector (domain).
     At least one of linkedin_url, email, or (first_name + last_name + company) is required.
 
     Returns a dict with: email, phone, linkedin_url, title, company, location.
@@ -35,65 +38,56 @@ def enrich_person(
     if not any([linkedin_url, email, (first_name and last_name)]):
         return {"error": "Provide linkedin_url, email, or first_name + last_name."}
 
-    # Apollo people match — best for name + company lookup
-    apollo_payload: dict = {}
-    if linkedin_url:
-        apollo_payload["linkedin_url"] = linkedin_url
-    if email:
-        apollo_payload["email"] = email
-    if first_name:
-        apollo_payload["first_name"] = first_name
-    if last_name:
-        apollo_payload["last_name"] = last_name
-    if company_domain:
-        apollo_payload["domain"] = company_domain
-    if company_name:
-        apollo_payload["organization_name"] = company_name
-
-    try:
-        result = deepline_execute("apollo_people_match", apollo_payload)
-        person = result.get("person", result)
-        if person and (person.get("email") or person.get("linkedin_url")):
-            return {
-                "provider": "apollo",
-                "name": f"{person.get('first_name', '')} {person.get('last_name', '')}".strip(),
-                "email": person.get("email"),
-                "phone": person.get("phone_numbers", [{}])[0].get("sanitized_number") if person.get("phone_numbers") else None,
-                "title": person.get("title"),
-                "company": person.get("organization_name"),
-                "linkedin_url": person.get("linkedin_url"),
-                "location": person.get("city"),
-            }
-    except Exception:
-        pass
-
-    # Hunter combined find as fallback
-    if company_domain and (first_name or last_name):
+    # Hunter email finder — best for domain + name lookup
+    if company_domain and first_name and last_name:
         try:
-            result = deepline_execute("hunter_combined_find", {
+            result = deepline_execute("hunter_email_finder", {
                 "domain": company_domain,
-                "first_name": first_name or "",
-                "last_name": last_name or "",
+                "first_name": first_name,
+                "last_name": last_name,
             })
             if result.get("email"):
                 return {
                     "provider": "hunter",
                     "email": result.get("email"),
-                    "name": f"{first_name or ''} {last_name or ''}".strip(),
+                    "name": f"{first_name} {last_name}".strip(),
                     "company": company_name or company_domain,
                     "linkedin_url": linkedin_url,
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("hunter_email_finder failed for enrich_person: %s", e)
 
-    # Crustdata people enrichment — good for LinkedIn-based lookups
+    # Crustdata people enrichment — LinkedIn-native, best when URL is known
     if linkedin_url:
         try:
             result = deepline_execute("crustdata_people_enrich", {"linkedin_url": linkedin_url})
             if result:
                 return {"provider": "crustdata", **result}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("crustdata_people_enrich failed for enrich_person: %s", e)
+
+    # Deepline Native Prospector — domain-specific, returns verified emails
+    if company_domain:
+        name_filter = f"{first_name or ''} {last_name or ''}".strip()
+        try:
+            result = deepline_execute("deepline_native_prospector", {
+                "domain": company_domain,
+                "title_filter": name_filter,
+                "limit": 1,
+            })
+            contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
+            if contacts:
+                c = contacts[0]
+                return {
+                    "provider": "deepline_native_prospector",
+                    "email": c.get("email"),
+                    "linkedin_url": c.get("linkedin"),
+                    "phone": c.get("phone"),
+                    "name": name_filter or None,
+                    "company": company_name or company_domain,
+                }
+        except Exception as e:
+            logger.debug("deepline_native_prospector failed for enrich_person: %s", e)
 
     return {"error": "Could not enrich contact — try providing more identifiers."}
 
@@ -201,8 +195,8 @@ def search_prospects(
                     for lead in leads
                 ],
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("dropleads_search_people failed for search_prospects: %s", e)
 
     # --- Deepline Native Prospector fallback (domain-specific, has email) ---
     if company_domain and job_title:
@@ -226,8 +220,8 @@ def search_prospects(
                     for c in contacts
                 ],
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("deepline_native_prospector failed for search_prospects: %s", e)
 
     return {"error": "No results found from Dropleads or Deepline Native Prospector.", "filters_used": filters}
 
@@ -244,48 +238,22 @@ def research_company(
     """
     Research a company: description, industry, headcount, funding, tech stack, location.
 
-    Fetches firmographic data from Apollo and Crustdata.
+    Waterfall: Crustdata (LinkedIn-native, headcount signals) → Exa web research (live, most current).
     Provide domain (e.g. "stripe.com") or company_name.
     """
     if not domain and not company_name:
         return {"error": "Provide domain or company_name."}
 
-    payload: dict = {}
-    if domain:
-        payload["domain"] = domain
-    if company_name:
-        payload["name"] = company_name
-
-    try:
-        result = deepline_execute("apollo_organization_enrich", payload)
-        org = result.get("organization", result)
-        if org and org.get("name"):
-            return {
-                "provider": "apollo",
-                "name": org.get("name"),
-                "domain": org.get("primary_domain") or domain,
-                "description": org.get("short_description"),
-                "industry": org.get("industry"),
-                "headcount": org.get("estimated_num_employees"),
-                "funding": org.get("total_funding_printed"),
-                "location": org.get("city"),
-                "linkedin_url": org.get("linkedin_url"),
-                "website": org.get("website_url"),
-                "technologies": org.get("technology_names", [])[:10],
-            }
-    except Exception:
-        pass
-
-    # Crustdata fallback
+    # Crustdata — LinkedIn-native, good headcount signals
     if domain:
         try:
-            result = deepline_execute("crustdata_company_enrichment", {"domain": domain})
+            result = deepline_execute("crustdata_company_enrichment", {"companyDomain": domain, "exactMatch": True})
             if result:
                 return {"provider": "crustdata", **result}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("crustdata_company_enrichment failed for research_company: %s", e)
 
-    # Exa web research fallback — live web sources, more current than database providers
+    # Exa web research — live web sources, most current data
     try:
         query = domain or company_name
         result = deepline_execute("exa_research", {
@@ -294,9 +262,9 @@ def research_company(
         })
         summary = (result.get("data") or result).get("output", {})
         if summary:
-            return {"provider": "exa_research (web)", "domain": domain, "company_name": company_name, "summary": summary}
-    except Exception:
-        pass
+            return {"provider": "exa_research", "domain": domain, "company_name": company_name, "summary": summary}
+    except Exception as e:
+        logger.debug("exa_research failed for research_company: %s", e)
 
     return {"error": f"Could not find company data for {domain or company_name}"}
 
@@ -332,6 +300,142 @@ def web_research(query: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Waterfall enrichment (Deepline-native)
+# ---------------------------------------------------------------------------
+
+
+def waterfall_enrich(
+    linkedin_url: Optional[str] = None,
+    email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    company_domain: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> dict:
+    """
+    Enrich a person using Deepline's native waterfall enrichment.
+
+    Delegates the entire provider waterfall to Deepline's API in a single call —
+    Deepline tries multiple providers in sequence and returns the best result.
+    Prefer this over enrich_person for bulk enrichment or when you want Deepline
+    to handle provider selection automatically.
+
+    At least one of linkedin_url, email, or (first_name + last_name + company) is required.
+
+    Returns a dict with: email, phone, linkedin_url, title, company, location.
+    """
+    if not any([linkedin_url, email, (first_name and last_name)]):
+        return {"error": "Provide linkedin_url, email, or first_name + last_name."}
+
+    payload: dict = {}
+    if linkedin_url:
+        payload["linkedin_url"] = linkedin_url
+    if email:
+        payload["email"] = email
+    if first_name:
+        payload["first_name"] = first_name
+    if last_name:
+        payload["last_name"] = last_name
+    if company_domain:
+        payload["company_domain"] = company_domain
+    if company_name:
+        payload["company_name"] = company_name
+
+    # Waterfall: try providers in cost order, stop on first hit.
+    # Note: Deepline "play" tools (name_and_company_to_email_waterfall, etc.) are
+    # CLI-only and cannot be called via the HTTP execute API.
+    # We implement the same sequence manually here.
+
+    providers_tried: list[str] = []
+
+    # 1. Dropleads email finder — free, fast
+    if first_name and last_name:
+        dl_payload: dict = {"first_name": first_name, "last_name": last_name}
+        if company_domain:
+            dl_payload["company_domain"] = company_domain
+        if company_name:
+            dl_payload["company_name"] = company_name
+        try:
+            result = deepline_execute("dropleads_email_finder", dl_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("dropleads_email_finder")
+            if found:
+                return {"provider": "dropleads_email_finder", "email": found, **result}
+        except Exception as e:
+            logger.debug("dropleads_email_finder failed: %s", e)
+
+    # 2. Hunter email finder — domain required
+    if first_name and last_name and company_domain:
+        try:
+            result = deepline_execute("hunter_email_finder", {
+                "domain": company_domain,
+                "first_name": first_name,
+                "last_name": last_name,
+            })
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("hunter_email_finder")
+            if found:
+                return {"provider": "hunter_email_finder", "email": found, **result}
+        except Exception as e:
+            logger.debug("hunter_email_finder failed: %s", e)
+
+    # 3. LeadMagic email finder
+    if first_name and last_name:
+        lm_payload: dict = {"first_name": first_name, "last_name": last_name}
+        if company_domain:
+            lm_payload["domain"] = company_domain
+        try:
+            result = deepline_execute("leadmagic_email_finder", lm_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("leadmagic_email_finder")
+            if found:
+                return {"provider": "leadmagic_email_finder", "email": found, **result}
+        except Exception as e:
+            logger.debug("leadmagic_email_finder failed: %s", e)
+
+    # 4. Deepline native contact enrichment
+    native_payload: dict = {}
+    if linkedin_url:
+        native_payload["linkedin"] = linkedin_url
+    if first_name:
+        native_payload["first_name"] = first_name
+    if last_name:
+        native_payload["last_name"] = last_name
+    if company_domain:
+        native_payload["domain"] = company_domain
+    if email:
+        native_payload["email"] = email
+    if native_payload:
+        try:
+            result = deepline_execute("deepline_native_enrich_contact", native_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("deepline_native_enrich_contact")
+            if found:
+                return {"provider": "deepline_native_enrich_contact", "email": found, **result}
+        except Exception as e:
+            logger.debug("deepline_native_enrich_contact failed: %s", e)
+
+    # 5. Crustdata person enrichment — LinkedIn URL required
+    if linkedin_url:
+        try:
+            result = deepline_execute("crustdata_person_enrichment", {
+                "linkedinProfileUrl": linkedin_url,
+            })
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("crustdata_person_enrichment")
+            if found:
+                return {"provider": "crustdata_person_enrichment", "email": found, **result}
+        except Exception as e:
+            logger.debug("crustdata_person_enrichment failed: %s", e)
+
+    return {
+        "error": "Waterfall enrichment returned no results.",
+        "providers_tried": providers_tried,
+        "tip": "Try providing more identifiers: first_name + last_name + company_domain + linkedin_url.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Email verification
 # ---------------------------------------------------------------------------
 
@@ -358,8 +462,8 @@ def verify_email(email: str) -> dict:
                 "company_name": result.get("company_name"),
             }
         # Fall through to ZeroBounce if LeadMagic returns unknown
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("leadmagic_email_validation failed for verify_email: %s", e)
 
     result = deepline_execute("zerobounce_batch_validate", {"email_batch": [{"email_address": email}]})
     items = result.get("email_batch", [])
@@ -392,44 +496,44 @@ def find_linkedin(
     """
     Find a person's LinkedIn profile URL given their name and company.
 
+    Waterfall: Deepline Native Prospector (if domain known) → Exa web research.
     Returns: {"linkedin_url": str, "confidence": str}
     """
-    apollo_payload: dict = {
-        "first_name": first_name,
-        "last_name": last_name,
-    }
-    if company_name:
-        apollo_payload["organization_name"] = company_name
+    # Deepline Native Prospector — domain-specific, returns LinkedIn URLs
     if company_domain:
-        apollo_payload["organization_domain_name"] = company_domain
+        name_filter = f"{first_name} {last_name}".strip()
+        try:
+            result = deepline_execute("deepline_native_prospector", {
+                "domain": company_domain,
+                "title_filter": name_filter,
+                "limit": 1,
+            })
+            contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
+            if contacts and contacts[0].get("linkedin"):
+                return {
+                    "linkedin_url": contacts[0]["linkedin"],
+                    "confidence": "high",
+                    "provider": "deepline_native_prospector",
+                }
+        except Exception as e:
+            logger.debug("deepline_native_prospector failed for find_linkedin: %s", e)
 
+    # Exa web research fallback — finds LinkedIn profiles via live web search
     try:
-        result = deepline_execute("apollo_people_match", apollo_payload)
-        person = result.get("person", {})
-        linkedin = person.get("linkedin_url", "")
-        if linkedin:
-            return {"linkedin_url": linkedin, "confidence": "high", "provider": "apollo"}
-    except Exception:
-        pass
-
-    # Apollo search fallback
-    search_payload: dict = {
-        "per_page": 1,
-    }
-    if company_name:
-        search_payload["organization_names"] = [company_name]
-
-    try:
-        result = deepline_execute("apollo_search_people", search_payload)
-        people = result.get("people", [])
-        if people and people[0].get("linkedin_url"):
-            return {
-                "linkedin_url": people[0]["linkedin_url"],
-                "confidence": "medium",
-                "provider": "apollo_search",
-            }
-    except Exception:
-        pass
+        company_hint = f" at {company_name or company_domain}" if (company_name or company_domain) else ""
+        result = deepline_execute("exa_research", {
+            "instructions": f"Find the LinkedIn profile URL for {first_name} {last_name}{company_hint}. Return only the linkedin.com/in/... URL.",
+            "model": "exa-research-fast",
+        })
+        data = result.get("data") or result
+        summary = str(data.get("output", ""))
+        # Extract linkedin.com/in/ URL from the response
+        import re
+        match = re.search(r"https?://(?:www\.)?linkedin\.com/in/[\w\-]+/?", summary)
+        if match:
+            return {"linkedin_url": match.group(0), "confidence": "medium", "provider": "exa_research"}
+    except Exception as e:
+        logger.debug("exa_research failed for find_linkedin: %s", e)
 
     return {"linkedin_url": "", "confidence": "none"}
 
@@ -450,39 +554,45 @@ def search_companies(
     """
     Build a list of companies matching ICP criteria.
 
-    Searches Apollo for companies by industry, location, headcount range, or keyword.
+    Uses Exa web research to find companies by industry, location, headcount range, or keyword.
     Use this to build target account lists before finding contacts.
 
     headcount_min / headcount_max: integer employee counts (e.g. 200, 500).
     Returns a list of companies with name, domain, headcount, industry, and description.
     """
-    payload: dict = {"per_page": min(limit, 25)}
-
-    if location:
-        payload["organization_locations"] = [location]
-    if headcount_min or headcount_max:
-        lo = headcount_min or 1
-        hi = headcount_max or 100_000
-        payload["organization_num_employees_ranges"] = [f"{lo},{hi}"]
-    if keywords:
-        payload["q_organization_keyword_tags"] = [keywords]
+    criteria_parts = []
     if industry:
-        payload["q_organization_keyword_tags"] = [*(payload.get("q_organization_keyword_tags") or []), industry]
+        criteria_parts.append(f"industry: {industry}")
+    if location:
+        criteria_parts.append(f"location: {location}")
+    if headcount_min and headcount_max:
+        criteria_parts.append(f"{headcount_min}–{headcount_max} employees")
+    elif headcount_min:
+        criteria_parts.append(f"at least {headcount_min} employees")
+    elif headcount_max:
+        criteria_parts.append(f"up to {headcount_max} employees")
+    if keywords:
+        criteria_parts.append(f"keywords: {keywords}")
 
-    result = deepline_execute("apollo_company_search", payload)
-    companies = result.get("organizations", [])[:limit]
-    return {
-        "provider": "apollo",
-        "count": len(companies),
-        "companies": [
-            {
-                "name": c.get("name"),
-                "domain": c.get("primary_domain"),
-                "headcount": c.get("estimated_num_employees"),
-                "industry": c.get("industry"),
-                "description": c.get("short_description"),
-                "location": c.get("city"),
-            }
-            for c in companies
-        ],
-    }
+    criteria = ", ".join(criteria_parts) or "general B2B companies"
+
+    try:
+        result = deepline_execute("exa_research", {
+            "instructions": (
+                f"Find {limit} real companies matching these criteria: {criteria}. "
+                "For each company return: company name, website domain, estimated headcount, industry, "
+                "one-sentence description, and HQ city. Format as a structured list."
+            ),
+            "model": "exa-research-fast",
+        })
+        data = result.get("data") or result
+        summary = data.get("output", "")
+        return {
+            "provider": "exa_research",
+            "criteria": criteria,
+            "count": limit,
+            "companies": summary,
+        }
+    except Exception as e:
+        logger.debug("exa_research failed for search_companies: %s", e)
+        return {"error": f"Company search failed: {e}", "criteria": criteria}

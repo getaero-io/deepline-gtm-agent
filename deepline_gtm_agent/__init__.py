@@ -12,7 +12,9 @@ Usage:
 """
 
 from deepline_gtm_agent.agent import create_gtm_agent
+from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
 from deepline_gtm_agent.tools import (
+    waterfall_enrich,
     enrich_person,
     search_prospects,
     research_company,
@@ -23,6 +25,9 @@ from deepline_gtm_agent.tools import (
 
 __all__ = [
     "create_gtm_agent",
+    "load_tool_catalog",
+    "make_deepline_call_tool",
+    "waterfall_enrich",
     "enrich_person",
     "search_prospects",
     "research_company",
