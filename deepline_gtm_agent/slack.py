@@ -27,8 +27,54 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Markdown → Slack mrkdwn converter
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+
+def md_to_slack(text: str) -> str:
+    """
+    Convert common Markdown patterns to Slack mrkdwn.
+    The LLM is prompted to output mrkdwn directly, but this acts as a safety net.
+    """
+    # Headers: ### Title → *Title*
+    text = _re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=_re.MULTILINE)
+    # Bold: **text** → *text*
+    text = _re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+    # Italic: _text_ already correct; *text* → _text_ only when not already bold
+    # (skip — single * is already Slack bold, leave it)
+    # Strikethrough: ~~text~~ → ~text~
+    text = _re.sub(r"~~(.+?)~~", r"~\1~", text)
+    # Horizontal rules: --- or *** → blank line
+    text = _re.sub(r"^[-*]{3,}\s*$", "", text, flags=_re.MULTILINE)
+    # Unordered list bullets: "- item" or "* item" → "• item"
+    text = _re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=_re.MULTILINE)
+    # Inline links: [text](url) → text (url) — Slack auto-links URLs
+    text = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    return text
+
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+
+# Per-workspace bot tokens — populated at runtime via the OAuth redirect.
+# Key: team_id (e.g. "T012AB3CD") → xoxb- bot token for that workspace.
+# Falls back to SLACK_BOT_TOKEN for workspaces not yet registered here.
+_workspace_tokens: dict[str, str] = {}
+
+
+def register_workspace_token(team_id: str, bot_token: str) -> None:
+    """Store a bot token for a workspace. Called after OAuth install."""
+    _workspace_tokens[team_id] = bot_token
+    logger.info("Registered token for workspace %s", team_id)
+
+
+def get_token_for_team(team_id: str) -> str:
+    """Return the bot token for the given workspace, falling back to env var."""
+    return _workspace_tokens.get(team_id, SLACK_BOT_TOKEN)
+
 
 # In-memory conversation history per Slack thread.
 # Key: (channel, thread_ts) → list of {"role": ..., "content": ...}
@@ -77,8 +123,18 @@ def verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def post_message(channel: str, text: str, thread_ts: str | None = None) -> dict:
-    """Post a message to a Slack channel or thread."""
+async def post_message(
+    channel: str,
+    text: str,
+    token: str,
+    thread_ts: str | None = None,
+    user_id: str | None = None,
+) -> dict:
+    """Post a message to a Slack channel or thread.
+
+    If posting fails with channel_not_found (bot not in channel) and a user_id
+    is provided, falls back to opening a DM with the user.
+    """
     payload: dict[str, Any] = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
@@ -86,37 +142,68 @@ async def post_message(channel: str, text: str, thread_ts: str | None = None) ->
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             "https://slack.com/api/chat.postMessage",
-            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            headers={"Authorization": f"Bearer {token}"},
             json=payload,
             timeout=10,
         )
     data = resp.json()
     if not data.get("ok"):
-        logger.error("chat.postMessage failed: %s", data.get("error"))
+        error = data.get("error", "")
+        logger.error("chat.postMessage failed: %s", error)
+        if error == "channel_not_found" and user_id:
+            logger.info("Falling back to DM for user %s", user_id)
+            async with httpx.AsyncClient() as client:
+                dm_resp = await client.post(
+                    "https://slack.com/api/conversations.open",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"users": user_id},
+                    timeout=10,
+                )
+            dm_channel = dm_resp.json().get("channel", {}).get("id")
+            if dm_channel:
+                async with httpx.AsyncClient() as client:
+                    fallback = await client.post(
+                        "https://slack.com/api/chat.postMessage",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"channel": dm_channel, "text": text},
+                        timeout=10,
+                    )
+                return fallback.json()
     return data
 
 
-async def update_message(channel: str, ts: str, text: str) -> dict:
-    """Update an existing Slack message (used to swap 'Thinking...' with real reply)."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            "https://slack.com/api/chat.update",
-            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-            json={"channel": channel, "ts": ts, "text": text},
-            timeout=10,
-        )
-    return resp.json()
+async def add_reaction(channel: str, ts: str, emoji: str, token: str) -> None:
+    """Add an emoji reaction to a message. Never raises — failures are logged and ignored."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://slack.com/api/reactions.add",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"channel": channel, "timestamp": ts, "name": emoji},
+                timeout=10,
+            )
+        data = resp.json()
+        if not data.get("ok") and data.get("error") != "already_reacted":
+            logger.debug("reactions.add failed: %s", data.get("error"))
+    except Exception as e:
+        logger.debug("reactions.add error: %s", e)
 
 
-async def get_bot_user_id() -> str:
-    """Fetch the bot's own user ID (used to filter out self-messages)."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://slack.com/api/auth.test",
-            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-            timeout=10,
-        )
-    return resp.json().get("user_id", "")
+async def remove_reaction(channel: str, ts: str, emoji: str, token: str) -> None:
+    """Remove an emoji reaction from a message. Never raises — failures are logged and ignored."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://slack.com/api/reactions.remove",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"channel": channel, "timestamp": ts, "name": emoji},
+                timeout=10,
+            )
+        data = resp.json()
+        if not data.get("ok") and data.get("error") != "no_reaction":
+            logger.debug("reactions.remove failed: %s", data.get("error"))
+    except Exception as e:
+        logger.debug("reactions.remove error: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +231,11 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
     event_type = event.get("type", "")
     event_id = payload.get("event_id", "")
 
+    logger.info("Slack event received: type=%s event_id=%s", event_type, event_id)
+
     # Dedup
     if event_id and event_id in _seen_event_ids:
+        logger.info("Skipping duplicate event: %s", event_id)
         return
     if event_id:
         _seen_event_ids.add(event_id)
@@ -155,46 +245,48 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
 
     # Only handle user messages (ignore bot messages, including our own)
     if event.get("bot_id") or event.get("subtype"):
+        logger.info("Ignoring bot/subtype message (bot_id=%s, subtype=%s)", event.get("bot_id"), event.get("subtype"))
         return
 
     user_text = _extract_text(event)
     if not user_text:
+        logger.info("Empty text after extraction, ignoring")
         return
 
-    channel = event.get("channel", "")
-    # Use thread_ts if this is a reply; otherwise start a new thread from message ts
-    thread_ts = event.get("thread_ts") or event.get("ts")
+    team_id = payload.get("team_id", "")
+    token = get_token_for_team(team_id)
 
-    thread_key = (channel, thread_ts)
+    channel = event.get("channel", "")
+    user_id = event.get("user", "")
+    logger.info("Processing message team=%s channel=%s text=%.80r", team_id, channel, user_text)
+    message_ts = event.get("ts", "")
+    thread_ts = event.get("thread_ts") or message_ts
+
+    thread_key = (team_id, channel, thread_ts)
 
     # Add user message to history
     _conversation_history[thread_key].append({"role": "user", "content": user_text})
 
-    # Post a "Thinking..." placeholder immediately so the user sees activity
-    thinking_resp = await post_message(channel, "_Thinking…_", thread_ts=thread_ts)
-    thinking_ts = thinking_resp.get("ts")
+    # React with 👀 so the user knows their message is being processed
+    if message_ts:
+        await add_reaction(channel, message_ts, "eyes", token=token)
 
     try:
         messages = list(_conversation_history[thread_key])
         reply = await agent_fn(messages)
 
-        # Update placeholder with real reply
-        if thinking_ts:
-            await update_message(channel, thinking_ts, reply)
-        else:
-            await post_message(channel, reply, thread_ts=thread_ts)
+        if message_ts:
+            await remove_reaction(channel, message_ts, "eyes", token=token)
+        await post_message(channel, md_to_slack(reply), token=token, thread_ts=thread_ts, user_id=user_id)
 
-        # Store assistant reply in history
         _conversation_history[thread_key].append({"role": "assistant", "content": reply})
 
-        # Trim history to last 20 turns to avoid token bloat
         if len(_conversation_history[thread_key]) > 40:
             _conversation_history[thread_key] = _conversation_history[thread_key][-40:]
 
     except Exception as e:
-        error_text = f"Something went wrong: {e}"
+        error_text = f":warning: Something went wrong: {e}"
         logger.exception("Error processing Slack event")
-        if thinking_ts:
-            await update_message(channel, thinking_ts, error_text)
-        else:
-            await post_message(channel, error_text, thread_ts=thread_ts)
+        if message_ts:
+            await remove_reaction(channel, message_ts, "eyes", token=token)
+        await post_message(channel, error_text, token=token, thread_ts=thread_ts, user_id=user_id)
