@@ -39,20 +39,21 @@ def md_to_slack(text: str) -> str:
     Convert common Markdown patterns to Slack mrkdwn.
     The LLM is prompted to output mrkdwn directly, but this acts as a safety net.
     """
-    # Headers: ### Title → *Title*
-    text = _re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=_re.MULTILINE)
-    # Bold: **text** → *text*
-    text = _re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
-    # Italic: _text_ already correct; *text* → _text_ only when not already bold
-    # (skip — single * is already Slack bold, leave it)
+    # Headers: ### Title → *Title*  (strip trailing # decorators too)
+    text = _re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=_re.MULTILINE)
+    # Bold: **text** or __text__ → *text*  (use [^*]+ to avoid crossing bold spans)
+    text = _re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
+    text = _re.sub(r"__([^_\n]+)__", r"*\1*", text)
     # Strikethrough: ~~text~~ → ~text~
     text = _re.sub(r"~~(.+?)~~", r"~\1~", text)
-    # Horizontal rules: --- or *** → blank line
-    text = _re.sub(r"^[-*]{3,}\s*$", "", text, flags=_re.MULTILINE)
+    # Horizontal rules: --- or *** or ___ → blank line
+    text = _re.sub(r"^[-*_]{3,}\s*$", "", text, flags=_re.MULTILINE)
+    # Blockquotes: "> text" → text (Slack doesn't support blockquotes)
+    text = _re.sub(r"^>\s?", "", text, flags=_re.MULTILINE)
     # Unordered list bullets: "- item" or "* item" → "• item"
     text = _re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=_re.MULTILINE)
-    # Inline links: [text](url) → text (url) — Slack auto-links URLs
-    text = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    # Inline links: [text](url) → <url|text>  (Slack hyperlink format)
+    text = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
     return text
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
@@ -129,7 +130,7 @@ async def post_message(
     If posting fails with channel_not_found (bot not in channel) and a user_id
     is provided, falls back to opening a DM with the user.
     """
-    payload: dict[str, Any] = {"channel": channel, "text": text}
+    payload: dict[str, Any] = {"channel": channel, "text": text, "mrkdwn": True}
     if thread_ts:
         payload["thread_ts"] = thread_ts
 
