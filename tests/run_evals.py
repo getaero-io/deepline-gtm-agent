@@ -269,7 +269,7 @@ async def run_agent_http(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=300) as client:
+    async with httpx.AsyncClient(timeout=480) as client:
         resp = await client.post(
             f"{url.rstrip('/')}/chat",
             json={"messages": [{"role": "user", "content": prompt}]},
