@@ -53,6 +53,7 @@ def create_gtm_agent(
     extra_tools: Optional[Sequence[BaseTool | Callable | dict[str, Any]]] = None,
     skill_docs: Optional[str] = None,
     tool_catalog: Optional[list[dict]] = None,
+    checkpointer: Any = None,
     **kwargs: Any,
 ):
     """
@@ -115,6 +116,9 @@ def create_gtm_agent(
             "Treat them as authoritative.\n\n"
             f"{skill_docs}"
         )
+
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
 
     return create_deep_agent(
         model=model,

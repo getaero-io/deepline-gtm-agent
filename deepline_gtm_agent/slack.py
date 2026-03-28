@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import time
-from collections import defaultdict
 from typing import Any
 
 import httpx
@@ -75,11 +74,6 @@ def get_token_for_team(team_id: str) -> str:
     """Return the bot token for the given workspace, falling back to env var."""
     return _workspace_tokens.get(team_id, SLACK_BOT_TOKEN)
 
-
-# In-memory conversation history per Slack thread.
-# Key: (channel, thread_ts) → list of {"role": ..., "content": ...}
-# Resets on process restart — good enough for demo, swap for Redis in prod.
-_conversation_history: dict[tuple, list] = defaultdict(list)
 
 # Dedup cache: Slack sometimes sends events twice. Track processed event IDs.
 _seen_event_ids: set[str] = set()
@@ -226,7 +220,10 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
     Called as a background task — Slack has already received its 200.
 
     agent_fn: async callable that takes a list of messages and returns a reply string.
+    Conversation history is persisted in Redis (7-day TTL) with in-memory fallback.
     """
+    from deepline_gtm_agent.redis_client import append_history, get_history
+
     event = payload.get("event", {})
     event_type = event.get("type", "")
     event_id = payload.get("event_id", "")
@@ -239,7 +236,6 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
         return
     if event_id:
         _seen_event_ids.add(event_id)
-        # Keep set bounded
         if len(_seen_event_ids) > 10_000:
             _seen_event_ids.clear()
 
@@ -262,27 +258,25 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
     message_ts = event.get("ts", "")
     thread_ts = event.get("thread_ts") or message_ts
 
-    thread_key = (team_id, channel, thread_ts)
+    # Redis key: one history list per Slack thread
+    history_key = f"slack_history:{team_id}:{channel}:{thread_ts}"
 
-    # Add user message to history
-    _conversation_history[thread_key].append({"role": "user", "content": user_text})
+    # Append user message and get full history
+    messages = await append_history(history_key, {"role": "user", "content": user_text})
 
     # React with 👀 so the user knows their message is being processed
     if message_ts:
         await add_reaction(channel, message_ts, "eyes", token=token)
 
     try:
-        messages = list(_conversation_history[thread_key])
         reply = await agent_fn(messages)
 
         if message_ts:
             await remove_reaction(channel, message_ts, "eyes", token=token)
         await post_message(channel, md_to_slack(reply), token=token, thread_ts=thread_ts, user_id=user_id)
 
-        _conversation_history[thread_key].append({"role": "assistant", "content": reply})
-
-        if len(_conversation_history[thread_key]) > 40:
-            _conversation_history[thread_key] = _conversation_history[thread_key][-40:]
+        # Persist assistant reply
+        await append_history(history_key, {"role": "assistant", "content": reply})
 
     except Exception as e:
         error_text = f":warning: Something went wrong: {e}"

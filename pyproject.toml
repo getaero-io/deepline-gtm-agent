@@ -14,6 +14,8 @@ dependencies = [
     "langchain-anthropic>=1.4",
     "langchain-openai>=0.3",
     "httpx>=0.28",
+    "redis>=5.0",
+    "langgraph-checkpoint-redis>=0.0.6",
 ]
 
 [project.urls]

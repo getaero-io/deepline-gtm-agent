@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from deepline_gtm_agent import create_gtm_agent
 from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.dynamic_tools import load_tool_catalog
+from deepline_gtm_agent.redis_client import make_checkpointer
 import httpx
 
 from deepline_gtm_agent.slack import (
@@ -65,28 +66,24 @@ app.add_middleware(
 _agent = None
 _skill_docs: str = ""
 _tool_catalog: list[dict] = []
+_checkpointer = None
 
 
 @app.on_event("startup")
 async def startup():
     """
     Fetch Deepline skill docs + tool catalog at startup.
-
-    Runs concurrently so startup is fast even with 30+ docs.
-    Both are cached to disk so subsequent cold starts are instant.
+    Also initialises the Redis checkpointer for persistent conversation memory.
     """
-    global _skill_docs, _tool_catalog, _agent
+    global _skill_docs, _tool_catalog, _agent, _checkpointer
     import asyncio
 
-    logger.info("Loading Deepline skill docs and tool catalog...")
+    logger.info("Loading Deepline skill docs, tool catalog, and checkpointer...")
 
     # Load skill docs (async HTTP) and tool catalog (sync subprocess) concurrently
     skill_task = asyncio.create_task(load_skill_docs())
-
-    # Catalog load is sync (subprocess), run in thread pool so it doesn't block
     loop = asyncio.get_event_loop()
     catalog_task = loop.run_in_executor(None, load_tool_catalog)
-
     _skill_docs, _tool_catalog = await asyncio.gather(skill_task, catalog_task)
 
     doc_count = _skill_docs.count("## Skill doc:")
@@ -95,17 +92,28 @@ async def startup():
         doc_count, len(_skill_docs) / 1024, len(_tool_catalog),
     )
 
+    # Init LangGraph checkpointer (Redis if REDIS_URL set, else MemorySaver)
+    _checkpointer = make_checkpointer()
+    # AsyncRedisSaver requires explicit setup
+    if _checkpointer is not None:
+        try:
+            await _checkpointer.__aenter__()
+        except Exception:
+            pass  # MemorySaver doesn't need setup; AsyncRedisSaver does
+
     model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
     _agent = create_gtm_agent(
         model=model,
         skill_docs=_skill_docs or None,
         tool_catalog=_tool_catalog or None,
+        checkpointer=_checkpointer,
     )
     logger.info(
-        "Agent ready (model=%s, skills=%s, tools=%d)",
+        "Agent ready (model=%s, skills=%s, tools=%d, memory=%s)",
         model,
         "loaded" if _skill_docs else "unavailable",
         len(_tool_catalog),
+        type(_checkpointer).__name__ if _checkpointer else "none",
     )
 
 
@@ -117,14 +125,20 @@ def get_agent():
             model=model,
             skill_docs=_skill_docs or None,
             tool_catalog=_tool_catalog or None,
+            checkpointer=_checkpointer,
         )
     return _agent
 
 
-async def run_agent(messages: list[dict]) -> str:
-    """Run the GTM agent and return a plain text reply."""
+async def run_agent(messages: list[dict], thread_id: str | None = None) -> str:
+    """Run the GTM agent and return a plain text reply.
+
+    thread_id: when provided, the LangGraph checkpointer persists state across
+    calls with the same thread_id — enabling true multi-turn memory.
+    """
     agent = get_agent()
-    result = await agent.ainvoke({"messages": messages})
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else {}
+    result = await agent.ainvoke({"messages": messages}, config=config or None)
     last = result["messages"][-1]
     content = last.content
     if isinstance(content, list):
@@ -176,7 +190,7 @@ async def health():
 async def chat(req: ChatRequest):
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     try:
-        reply = await run_agent(messages)
+        reply = await run_agent(messages, thread_id=req.thread_id)
         return ChatResponse(message=reply, thread_id=req.thread_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
