@@ -367,11 +367,50 @@ def search_prospects(
         except Exception as e:
             logger.debug("deepline_native_prospector failed for search_prospects: %s", e)
 
-    tips = ["Try broader titles, or use deepline_call with icypeas_find_people for more filter options."]
+    # Final fallback: Icypeas find_people (broader coverage, city-level filters)
+    if job_title:
+        try:
+            icypeas_payload: dict = {
+                "job_title": {"include": title_variants or [job_title]},
+                "limit": min(limit, 25),
+            }
+            if person_location:
+                icypeas_payload["location"] = {"include": [person_location]}
+            if company_industry:
+                icypeas_payload["industry"] = {"include": [company_industry]}
+            result = deepline_execute("icypeas_find_people", icypeas_payload)
+            people = (result.get("data") or result).get("people", [])[:limit]
+            if people:
+                notes = ["Dropleads had no coverage — results from Icypeas fallback"]
+                if city_hint:
+                    notes.append(f"filtered to {city_hint}")
+                return {
+                    "provider": "icypeas_fallback",
+                    "title_variants_tried": title_variants,
+                    "count": len(people),
+                    "note": "; ".join(notes),
+                    "prospects": [
+                        {
+                            "name": p.get("fullName") or f"{p.get('firstName','')} {p.get('lastName','')}".strip(),
+                            "title": p.get("jobTitle"),
+                            "company": p.get("companyName"),
+                            "linkedin_url": p.get("linkedinUrl"),
+                            "email": p.get("email") or None,
+                            "location": p.get("location"),
+                            "has_email": bool(p.get("email")),
+                        }
+                        for p in people
+                    ],
+                }
+        except Exception as e:
+            logger.debug("icypeas_find_people fallback failed: %s", e)
+
+    tips = ["Dropleads and Icypeas had no coverage for this title+filter combination."]
     if city_hint:
-        tips.append(f"Note: Dropleads searched country-wide (United States) — it cannot filter specifically to {city_hint}. Try Icypeas for city-level filtering.")
+        tips.append(f"Dropleads searched country-wide (United States) — cannot filter to {city_hint} specifically.")
+    tips.append("Try web_research for a broader search, or use deepline_call with apollo_search_people.")
     return {
-        "error": "No results found.",
+        "error": "No results found from any provider.",
         "title_variants_tried": title_variants,
         "filters_used": {k: v for k, v in filters.items() if not k.startswith("_")},
         "tip": " ".join(tips),
