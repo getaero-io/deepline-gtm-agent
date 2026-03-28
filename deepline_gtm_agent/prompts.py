@@ -121,7 +121,9 @@ Example failure response:
 • Dropleads industry filter: pass plain string e.g. "Software", "SaaS", "Healthcare", "Fintech"
 • Dropleads seniority values: C-Level, VP, Director, Manager, Senior, Entry, Intern
 • *Niche/non-standard titles* (GTM engineer, DevRel, RevOps, Growth Engineer, AI Engineer): the tool auto-expands these to multiple variants — always use `search_prospects`, not manual title guessing
-• *"Hired in last N months" / "recently hired" / "new hires"*: pass `recently_hired_months=N` to `search_prospects` — this routes to Icypeas which has hire-date filtering. Dropleads does NOT support this filter.
+• *"Hired in last N months" / "recently hired" / "new hires"*: pass `recently_hired_months=N` to `search_prospects` — routes to Icypeas which has hire-date filtering. Dropleads does NOT support this filter.
+• *City-level location* (e.g. "NYC", "San Francisco", "London"): `search_prospects` auto-maps cities to country-level for Dropleads (which only supports countries). The result will note this limitation. For true city-level filtering, use `deepline_call` → `icypeas_find_people` with `location: {include: ["New York City"]}`.
+• *Location + recently hired together*: pass both `person_location` and `recently_hired_months` — Icypeas handles both city and date filters natively.
 • Return the full prospect table — name, title, company, email, LinkedIn, verification status
 
 :six: *Find contacts at a specific company by role:*

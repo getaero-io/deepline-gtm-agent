@@ -125,6 +125,70 @@ _SENIORITY_MAP = {
 }
 
 # Niche/ambiguous titles that need expansion to get results from Dropleads
+# City/state → country mapping for Dropleads (personalCountries accepts country names only)
+_LOCATION_TO_COUNTRY: dict[str, str] = {
+    # US cities/states
+    "new york city": "United States",
+    "new york": "United States",
+    "nyc": "United States",
+    "san francisco": "United States",
+    "sf": "United States",
+    "bay area": "United States",
+    "silicon valley": "United States",
+    "los angeles": "United States",
+    "la": "United States",
+    "chicago": "United States",
+    "boston": "United States",
+    "seattle": "United States",
+    "austin": "United States",
+    "miami": "United States",
+    "denver": "United States",
+    "atlanta": "United States",
+    "california": "United States",
+    "texas": "United States",
+    "new york state": "United States",
+    "florida": "United States",
+    # UK cities
+    "london": "United Kingdom",
+    "manchester": "United Kingdom",
+    "edinburgh": "United Kingdom",
+    # Other
+    "toronto": "Canada",
+    "vancouver": "Canada",
+    "sydney": "Australia",
+    "melbourne": "Australia",
+    "berlin": "Germany",
+    "paris": "France",
+    "amsterdam": "Netherlands",
+    "stockholm": "Sweden",
+    "singapore": "Singapore",
+    "dubai": "United Arab Emirates",
+    "tel aviv": "Israel",
+}
+
+# City names we can use for post-filter hints (returned in search note)
+_CITY_KEYWORDS = {
+    "new york city", "nyc", "san francisco", "sf", "bay area",
+    "los angeles", "chicago", "boston", "seattle", "austin",
+    "miami", "london", "berlin", "paris", "toronto", "sydney",
+}
+
+
+def _normalize_location(location: str) -> tuple[str, str | None]:
+    """
+    Map a city/state/region to a Dropleads-compatible country string.
+    Returns (country_for_dropleads, original_city_hint_or_None).
+    """
+    normalized = location.strip().lower()
+    country = _LOCATION_TO_COUNTRY.get(normalized)
+    if country:
+        # Keep original as hint for the response
+        city_hint = location if normalized in _CITY_KEYWORDS else None
+        return country, city_hint
+    # Already a country name — pass through
+    return location, None
+
+
 _TITLE_EXPANSIONS: dict[str, list[str]] = {
     "gtm engineer": ["GTM Engineer", "Growth Engineer", "Revenue Operations Engineer", "Marketing Engineer"],
     "gtm": ["GTM Engineer", "Growth Engineer", "Go-To-Market"],
@@ -187,6 +251,7 @@ def search_prospects(
                 "limit": min(limit, 25),
             }
             if person_location:
+                # Icypeas accepts city names directly
                 icypeas_payload["location"] = {"include": [person_location]}
             result = deepline_execute("icypeas_find_people", icypeas_payload)
             people = (result.get("data") or result).get("people", [])[:limit]
@@ -230,13 +295,17 @@ def search_prospects(
     elif company_name:
         filters["companyNames"] = [company_name]
     if person_location:
-        # Dropleads uses city/state strings in personalCountries — try both formats
-        filters["personalCountries"] = {"include": [person_location]}
+        # Dropleads personalCountries only accepts country names — map cities/states
+        dropleads_country, city_hint = _normalize_location(person_location)
+        filters["personalCountries"] = {"include": [dropleads_country]}
+        if city_hint:
+            filters["_city_hint"] = city_hint  # passed through to response note
     if company_size_min or company_size_max:
         filters["employeeRanges"] = _employee_ranges(company_size_min, company_size_max)
     if company_industry:
         filters["industries"] = [company_industry]
 
+    city_hint = filters.pop("_city_hint", None)
     try:
         result = deepline_execute("dropleads_search_people", {
             "filters": filters,
@@ -244,15 +313,17 @@ def search_prospects(
         })
         leads = (result.get("data") or result).get("leads", [])[:limit]
         if leads:
-            note = ""
+            notes = []
             if recently_hired_months:
-                note = f" (note: Dropleads has no hire-date filter — results are not filtered to last {recently_hired_months} months)"
+                notes.append(f"Dropleads has no hire-date filter — results are not filtered to last {recently_hired_months} months")
+            if city_hint:
+                notes.append(f"Dropleads filters by country only — searched United States broadly, not specifically {city_hint}")
             return {
                 "provider": "dropleads",
                 "title_variants_tried": title_variants,
                 "total": (result.get("data") or result).get("total", len(leads)),
                 "count": len(leads),
-                "note": note or None,
+                "note": "; ".join(notes) if notes else None,
                 "prospects": [
                     {
                         "name": lead.get("fullName"),
@@ -296,11 +367,14 @@ def search_prospects(
         except Exception as e:
             logger.debug("deepline_native_prospector failed for search_prospects: %s", e)
 
+    tips = ["Try broader titles, or use deepline_call with icypeas_find_people for more filter options."]
+    if city_hint:
+        tips.append(f"Note: Dropleads searched country-wide (United States) — it cannot filter specifically to {city_hint}. Try Icypeas for city-level filtering.")
     return {
         "error": "No results found.",
         "title_variants_tried": title_variants,
-        "filters_used": filters,
-        "tip": "Try broader titles, remove location filter, or use deepline_call with icypeas_find_people for more filter options.",
+        "filters_used": {k: v for k, v in filters.items() if not k.startswith("_")},
+        "tip": " ".join(tips),
     }
 
 
