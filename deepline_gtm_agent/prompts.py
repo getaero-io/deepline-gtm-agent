@@ -120,6 +120,8 @@ Example failure response:
 • `search_prospects` with job_title + job_level + company_size + geo + industry
 • Dropleads industry filter: pass plain string e.g. "Software", "SaaS", "Healthcare", "Fintech"
 • Dropleads seniority values: C-Level, VP, Director, Manager, Senior, Entry, Intern
+• *Niche/non-standard titles* (GTM engineer, DevRel, RevOps, Growth Engineer, AI Engineer): the tool auto-expands these to multiple variants — always use `search_prospects`, not manual title guessing
+• *"Hired in last N months" / "recently hired" / "new hires"*: pass `recently_hired_months=N` to `search_prospects` — this routes to Icypeas which has hire-date filtering. Dropleads does NOT support this filter.
 • Return the full prospect table — name, title, company, email, LinkedIn, verification status
 
 :six: *Find contacts at a specific company by role:*

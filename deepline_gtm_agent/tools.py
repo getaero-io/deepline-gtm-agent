@@ -124,6 +124,30 @@ _SENIORITY_MAP = {
     "individual_contributor": "Senior",
 }
 
+# Niche/ambiguous titles that need expansion to get results from Dropleads
+_TITLE_EXPANSIONS: dict[str, list[str]] = {
+    "gtm engineer": ["GTM Engineer", "Growth Engineer", "Revenue Operations Engineer", "Marketing Engineer"],
+    "gtm": ["GTM Engineer", "Growth Engineer", "Go-To-Market"],
+    "growth engineer": ["Growth Engineer", "GTM Engineer", "Marketing Engineer", "Revenue Engineer"],
+    "ai engineer": ["AI Engineer", "Machine Learning Engineer", "ML Engineer", "Artificial Intelligence Engineer"],
+    "llm engineer": ["LLM Engineer", "AI Engineer", "Machine Learning Engineer", "NLP Engineer"],
+    "devrel": ["Developer Relations", "Developer Advocate", "DevRel Engineer", "Developer Experience"],
+    "revops": ["Revenue Operations", "RevOps", "Sales Operations", "GTM Operations"],
+    "data scientist": ["Data Scientist", "Machine Learning Engineer", "AI Researcher", "Research Scientist"],
+}
+
+
+def _expand_title(title: str) -> list[str]:
+    """Return a list of title variations for niche/ambiguous titles."""
+    normalized = title.lower().strip()
+    if normalized in _TITLE_EXPANSIONS:
+        return _TITLE_EXPANSIONS[normalized]
+    # Check partial matches
+    for key, variants in _TITLE_EXPANSIONS.items():
+        if key in normalized or normalized in key:
+            return [title] + [v for v in variants if v.lower() != normalized]
+    return [title]
+
 
 def search_prospects(
     job_title: Optional[str] = None,
@@ -134,26 +158,69 @@ def search_prospects(
     company_size_min: Optional[int] = None,
     company_size_max: Optional[int] = None,
     company_industry: Optional[str] = None,
+    recently_hired_months: Optional[int] = None,
     limit: int = 10,
 ) -> dict:
     """
     Search for people (prospects) matching ICP criteria.
 
-    Uses Dropleads (free) as primary provider. Falls through to Deepline Native Prospector
-    when a company_domain is provided and more depth is needed.
+    Uses Dropleads (free) as primary provider with automatic title expansion for niche roles.
+    When recently_hired_months is set, routes to Icypeas which supports job start-date filtering.
+    Falls through to Deepline Native Prospector when a company_domain is provided.
 
     job_level accepted values: owner, founder, c_suite, vp, director, manager, individual_contributor.
     company_size_min / company_size_max: integer employee counts (e.g. 200, 500).
     company_industry: plain-language industry (e.g. "Software", "SaaS", "Healthcare").
-    person_location: country or US state name (e.g. "United States", "California").
+    person_location: country or US state name (e.g. "United States", "California", "New York").
+    recently_hired_months: filter to people who started their current role within this many months.
 
     Returns a list of people with name, title, company, LinkedIn URL, and email (when available).
     """
-    # --- Dropleads primary search ---
-    filters: dict = {}
+    # --- Recently hired: route to Icypeas which supports start-date filtering ---
+    if recently_hired_months and job_title:
+        from datetime import datetime, timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=recently_hired_months * 30)).strftime("%Y-%m-%d")
+        try:
+            icypeas_payload: dict = {
+                "job_title": {"include": _expand_title(job_title)},
+                "started_role_after": cutoff,
+                "limit": min(limit, 25),
+            }
+            if person_location:
+                icypeas_payload["location"] = {"include": [person_location]}
+            result = deepline_execute("icypeas_find_people", icypeas_payload)
+            people = (result.get("data") or result).get("people", [])[:limit]
+            if people:
+                return {
+                    "provider": "icypeas",
+                    "filter": f"hired after {cutoff}",
+                    "count": len(people),
+                    "prospects": [
+                        {
+                            "name": p.get("fullName") or f"{p.get('firstName','')} {p.get('lastName','')}".strip(),
+                            "title": p.get("jobTitle"),
+                            "company": p.get("companyName"),
+                            "linkedin_url": p.get("linkedinUrl"),
+                            "email": p.get("email") or None,
+                            "location": p.get("location"),
+                            "started_role": p.get("startedRole"),
+                            "has_email": bool(p.get("email")),
+                        }
+                        for p in people
+                    ],
+                }
+        except Exception as e:
+            logger.debug("icypeas_find_people failed for recently_hired search: %s", e)
+        # Fall through to Dropleads without the date filter, noting the limitation
+        logger.info("Icypeas miss for recently_hired — falling back to Dropleads without date filter")
 
-    if job_title:
-        filters["jobTitles"] = [job_title]
+    # --- Dropleads primary search ---
+    # Expand niche titles to catch more results (e.g. "GTM engineer" → multiple variants)
+    title_variants = _expand_title(job_title) if job_title else []
+
+    filters: dict = {}
+    if title_variants:
+        filters["jobTitles"] = title_variants
     if job_level:
         dl_seniority = _SENIORITY_MAP.get(job_level)
         if dl_seniority:
@@ -163,6 +230,7 @@ def search_prospects(
     elif company_name:
         filters["companyNames"] = [company_name]
     if person_location:
+        # Dropleads uses city/state strings in personalCountries — try both formats
         filters["personalCountries"] = {"include": [person_location]}
     if company_size_min or company_size_max:
         filters["employeeRanges"] = _employee_ranges(company_size_min, company_size_max)
@@ -176,10 +244,15 @@ def search_prospects(
         })
         leads = (result.get("data") or result).get("leads", [])[:limit]
         if leads:
+            note = ""
+            if recently_hired_months:
+                note = f" (note: Dropleads has no hire-date filter — results are not filtered to last {recently_hired_months} months)"
             return {
                 "provider": "dropleads",
+                "title_variants_tried": title_variants,
                 "total": (result.get("data") or result).get("total", len(leads)),
                 "count": len(leads),
+                "note": note or None,
                 "prospects": [
                     {
                         "name": lead.get("fullName"),
@@ -223,7 +296,12 @@ def search_prospects(
         except Exception as e:
             logger.debug("deepline_native_prospector failed for search_prospects: %s", e)
 
-    return {"error": "No results found from Dropleads or Deepline Native Prospector.", "filters_used": filters}
+    return {
+        "error": "No results found.",
+        "title_variants_tried": title_variants,
+        "filters_used": filters,
+        "tip": "Try broader titles, remove location filter, or use deepline_call with icypeas_find_people for more filter options.",
+    }
 
 
 # ---------------------------------------------------------------------------
