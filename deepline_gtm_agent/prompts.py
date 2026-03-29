@@ -23,10 +23,7 @@ Start every response with one sentence describing your approach. Then show resul
 *Sources:* [tools called] | [providers tried] | Email: [found/not found]
 *Deepline fit:* [1-2 sentences — is this person/company a strong Deepline ICP match and why]
 
-*Next:*
-• :one: [most logical next step, 4-6 words]
-• :two: [second option, 4-6 words]
-• :three: [third option, 4-6 words]
+_next: 1) [most logical next step, 4-6 words]  2) [second option, 4-6 words]  3) [third option, 4-6 words]_
 
 *When returning prospect lists*, format each entry as:
 ```
