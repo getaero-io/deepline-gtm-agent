@@ -14,6 +14,26 @@ from deepline_gtm_agent.deepline import deepline_execute
 logger = logging.getLogger(__name__)
 
 
+def _normalize_linkedin_url(url: str) -> str:
+    """Ensure a LinkedIn URL is fully qualified with https://www.linkedin.com prefix."""
+    if not url:
+        return url
+    url = url.strip().rstrip("/")
+    if url.startswith("https://"):
+        return url
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    if url.startswith("www.linkedin.com"):
+        return "https://" + url
+    if url.startswith("linkedin.com"):
+        return "https://www." + url
+    # Already a path like "/in/username" or "in/username"
+    if url.startswith("/in/") or url.startswith("in/"):
+        slug = url.lstrip("/")
+        return f"https://www.linkedin.com/{slug}"
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Person enrichment
 # ---------------------------------------------------------------------------
@@ -37,6 +57,9 @@ def enrich_person(
     """
     if not any([linkedin_url, email, (first_name and last_name)]):
         return {"error": "Provide linkedin_url, email, or first_name + last_name."}
+
+    if linkedin_url:
+        linkedin_url = _normalize_linkedin_url(linkedin_url)
 
     # Hunter email finder — best for domain + name lookup
     if company_domain and first_name and last_name:
@@ -530,6 +553,9 @@ def waterfall_enrich(
     """
     if not any([linkedin_url, email, (first_name and last_name)]):
         return {"error": "Provide linkedin_url, email, or first_name + last_name."}
+
+    if linkedin_url:
+        linkedin_url = _normalize_linkedin_url(linkedin_url)
 
     payload: dict = {}
     if linkedin_url:

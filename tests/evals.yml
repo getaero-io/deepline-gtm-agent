@@ -41,6 +41,7 @@ evals:
     expect_response_not_contains:
       - no results
       - could not enrich
+      - failed to
 
   - id: enrich-person-by-name-domain
     tags: [core, enrichment]
