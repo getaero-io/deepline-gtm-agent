@@ -38,3 +38,6 @@ htmlcov/
 *.pem
 credentials.json
 secrets.json
+
+# Local eval/debug output — may contain real contact data
+tmp/

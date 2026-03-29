@@ -1,7 +1,7 @@
 # Example Prompts — Deepline GTM Agent
 
-These are copy-paste ready prompts for the most common GTM workflows.
-Each maps to a workflow from the LangChain GTM agent blog post, built on Deepline instead.
+Copy-paste ready prompts for the most common GTM workflows.
+Based on the patterns from ["How we built LangChain's GTM Agent"](https://blog.langchain.com/how-we-built-langchains-gtm-agent/), rebuilt here on Deepline's provider stack.
 
 ---
 
@@ -98,6 +98,15 @@ right now based on hiring signals, growth, and tech stack:
 Score them 1–10 on ICP fit and explain your reasoning.
 ```
 
+```
+Which of these companies is growing fastest right now?
+- Rippling
+- Deel
+- Remote
+
+Use headcount trends and recent funding signals. Show your sources.
+```
+
 ---
 
 ## Workflow 5 — Email Personalization at Scale
@@ -133,9 +142,51 @@ whether it's worth trying to find an alternative.
 
 ---
 
+## Workflow 7 — Build a Target Account List
+
+```
+Build me a list of 20 B2B SaaS companies:
+- 50–500 employees
+- Headquartered in the US or Canada
+- In the HR tech or people management space
+
+For each: name, domain, headcount, and a one-line description of what they do.
+I'll use this list to find contacts next.
+```
+
+```
+Find me 15 fintech companies in New York with between 100 and 1000 employees.
+I want to see their names, domains, headcount, and a brief description.
+Flag any that look like they're in the payments or lending space specifically.
+```
+
+---
+
+## Workflow 8 — C-Suite Lookup (web-first)
+
+For C-suite titles, database providers often have stale data — the agent is prompted to run a live web search first.
+
+```
+Who is the current CEO and CRO of Rippling? Find their verified work emails.
+```
+
+```
+Find the VP of Product at Linear. I need their LinkedIn URL and a verified email.
+I'll be reaching out for a partnership conversation.
+```
+
+```
+I want to reach the Head of Partnerships at Notion. Find them, verify their email,
+and give me two sentences of context about their background I can reference.
+```
+
+---
+
 ## Tips
 
-- **Be specific about company size, location, and title** — the more specific, the better Apollo's filters work
-- **Ask for sources** — the agent always includes a Sources & Confidence section; ask it to expand on any data point
-- **Chain workflows** — "find 5 prospects, then verify their emails, then draft openers" all in one prompt
-- **Ask about confidence** — if a result looks off, ask "how confident are you in this email?" and it'll explain
+- **Be specific about company size, location, and title** — filters work best when they're precise. "VP of Sales at B2B SaaS, 200–500 employees, US" beats "sales leader at a tech company."
+- **Chain workflows in one prompt** — "find 5 prospects, verify their emails, then draft openers" all works in a single message. The agent will call tools in sequence.
+- **Ask for sources** — the agent always includes a Sources & Confidence section. If a result looks off, ask "how confident are you in this email?" and it'll explain which provider returned it and why.
+- **Ask about confidence levels** — `find_linkedin` returns `"high"`, `"medium"`, or `"none"`. If it's medium, ask the agent to verify by cross-referencing the full name.
+- **Use `web_research` explicitly for recent signals** — if you want hiring trends, recent news, or funding rounds, say so. The agent will call `web_research` which hits live web sources via Exa.
+- **Start company research before contact search** — running `search_companies` first gives you domains, which makes `search_prospects` more precise (domain-level filtering is tighter than name matching).
