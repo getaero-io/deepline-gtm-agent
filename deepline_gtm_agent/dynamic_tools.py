@@ -263,16 +263,13 @@ def make_deepline_call_tool(catalog: Optional[list[dict]] = None) -> StructuredT
             code = structured.get("code", "")
             if code == "INTEGRATION_CREDENTIALS_MISSING":
                 provider = structured.get("integration_provider", tool_id.split("_")[0])
-                return {
-                    "error": "credentials_missing",
-                    "message": (
-                        f"No {provider.upper()} account connected. "
-                        f"Go to https://code.deepline.com/dashboard/billing to connect your {provider} account, "
-                        "then retry this request."
-                    ),
-                    "tool_id": tool_id,
-                    "action_required": "Connect account at https://code.deepline.com/dashboard/billing",
-                }
+                # Return a plain string so the LLM presents it verbatim rather than
+                # trying to interpret a dict and producing a vague "validation issue" message.
+                return (
+                    f"CREDENTIALS_MISSING: No {provider.upper()} account connected to Deepline. "
+                    f"The user needs to connect their {provider} account at "
+                    f"https://code.deepline.com/dashboard/billing before this tool can be used."
+                )
 
             return {"error": err_str[:500], "tool_id": tool_id, "payload_keys": list(payload.keys())}
 
