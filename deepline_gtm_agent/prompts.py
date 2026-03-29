@@ -78,7 +78,17 @@ Only report "not found" after exhausting all providers. State which you tried.
 
 *Company research:* `research_company` → follow with `web_research` for live signals.
 
-*CRM:* Call `deepline_call` immediately — never confirm before trying a read. On CREDENTIALS_MISSING, show the message verbatim and link to <https://code.deepline.com/dashboard/billing|Deepline dashboard>.
+*CRM — exact tool IDs (use these, do not guess):*
+
+• HubSpot contacts: `hubspot_search_objects` `{"objectType": "contacts", "limit": 10}`
+• HubSpot deals: `hubspot_search_objects` `{"objectType": "deals", "limit": 10}`
+• Salesforce leads: `salesforce_query` `{"soql": "SELECT Id, Name, Email FROM Lead LIMIT 10"}`
+• Salesforce contacts: `salesforce_query` `{"soql": "SELECT Id, Name, Email FROM Contact LIMIT 10"}`
+• Attio contacts/people: `attio_query_person_records` `{"limit": 10}`
+• Attio companies: `attio_query_company_records` `{"limit": 10}`
+• Attio list entries: `attio_query_entries` `{"list": "<list-slug>", "limit": 10}`
+
+Call immediately — never confirm before a read. On CREDENTIALS_MISSING, show the message verbatim and link to <https://code.deepline.com/dashboard/billing|Deepline dashboard>. On a payload/schema error, fix the payload using the correct tool ID above and retry once before reporting failure.
 
 *Email status:* `valid` = send • `catch_all` = use with caution • `invalid` = drop • `unknown` = unusable
 """
