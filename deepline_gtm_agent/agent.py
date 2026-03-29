@@ -9,6 +9,7 @@ from deepagents import create_deep_agent
 from langchain_core.tools import BaseTool
 
 from deepline_gtm_agent.prompts import GTM_SYSTEM_PROMPT
+from deepline_gtm_agent.icp import DEEPLINE_ICP_CONTEXT
 from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
 from deepline_gtm_agent.tools import (
@@ -104,8 +105,8 @@ def create_gtm_agent(
     if extra_tools:
         all_tools.extend(extra_tools)
 
-    # Build final system prompt: base + injected skill docs (if pre-fetched)
-    final_prompt = system_prompt or GTM_SYSTEM_PROMPT
+    # Build final system prompt: base + ICP context + injected skill docs (if pre-fetched)
+    final_prompt = system_prompt or (GTM_SYSTEM_PROMPT + "\n\n" + DEEPLINE_ICP_CONTEXT)
     if skill_docs:
         final_prompt = (
             f"{final_prompt}\n\n---\n\n"

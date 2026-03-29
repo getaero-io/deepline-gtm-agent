@@ -632,10 +632,104 @@ def waterfall_enrich(
         except Exception as e:
             logger.debug("crustdata_person_enrichment failed: %s", e)
 
+    # 6. Icypeas email search — name + domain or LinkedIn
+    if first_name and last_name:
+        ic_payload: dict = {"first_name": first_name, "last_name": last_name}
+        if company_domain:
+            ic_payload["company_domain"] = company_domain
+        elif company_name:
+            ic_payload["company_name"] = company_name
+        try:
+            result = deepline_execute("icypeas_email_search", ic_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("icypeas_email_search")
+            if found:
+                return {"provider": "icypeas_email_search", "email": found, **result}
+        except Exception as e:
+            logger.debug("icypeas_email_search failed: %s", e)
+
+    # 7. Prospeo person enrichment — LinkedIn URL or name + domain
+    prospeo_payload: dict = {}
+    if linkedin_url:
+        prospeo_payload["linkedin_url"] = linkedin_url
+    elif first_name and last_name and company_domain:
+        prospeo_payload["first_name"] = first_name
+        prospeo_payload["last_name"] = last_name
+        prospeo_payload["domain"] = company_domain
+    if prospeo_payload:
+        try:
+            result = deepline_execute("prospeo_person_enrichment", prospeo_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("prospeo_person_enrichment")
+            if found:
+                return {"provider": "prospeo_person_enrichment", "email": found, **result}
+        except Exception as e:
+            logger.debug("prospeo_person_enrichment failed: %s", e)
+
+    # 8. AI Ark email finder
+    if first_name and last_name:
+        ark_payload: dict = {"first_name": first_name, "last_name": last_name}
+        if company_domain:
+            ark_payload["domain"] = company_domain
+        elif company_name:
+            ark_payload["company_name"] = company_name
+        try:
+            result = deepline_execute("ai_ark_email_finder", ark_payload)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("ai_ark_email_finder")
+            if found:
+                return {"provider": "ai_ark_email_finder", "email": found, **result}
+        except Exception as e:
+            logger.debug("ai_ark_email_finder failed: %s", e)
+
+    # 9. PeopleDataLabs — enrichment by name + company
+    if first_name and last_name:
+        pdl_payload: dict = {
+            "params": {
+                "first_name": first_name,
+                "last_name": last_name,
+            }
+        }
+        if company_domain:
+            pdl_payload["params"]["company"] = company_domain
+        elif company_name:
+            pdl_payload["params"]["company"] = company_name
+        try:
+            result = deepline_execute("peopledatalabs_person_enrichment", pdl_payload)
+            found = result.get("work_email") or result.get("email") or (result.get("data", {}) or {}).get("work_email")
+            providers_tried.append("peopledatalabs_person_enrichment")
+            if found:
+                return {"provider": "peopledatalabs_person_enrichment", "email": found, **result}
+        except Exception as e:
+            logger.debug("peopledatalabs_person_enrichment failed: %s", e)
+
+    # 10. Forager role search — can return email when reveal_contact=True
+    if company_domain and (first_name or last_name):
+        role_title = f"{first_name or ''} {last_name or ''}".strip()
+        try:
+            result = deepline_execute("forager_person_role_search", {
+                "role_title": f'"{role_title}"',
+                "organization_domains": [company_domain],
+                "reveal_phones": False,
+            })
+            people = (result.get("data") or result).get("people", [])
+            for person in people:
+                found = person.get("email") or person.get("work_email")
+                if found:
+                    providers_tried.append("forager_person_role_search")
+                    return {"provider": "forager_person_role_search", "email": found, **person}
+            providers_tried.append("forager_person_role_search")
+        except Exception as e:
+            logger.debug("forager_person_role_search failed: %s", e)
+
     return {
-        "error": "Waterfall enrichment returned no results.",
+        "error": "All waterfall providers exhausted — no email found.",
         "providers_tried": providers_tried,
-        "tip": "Try providing more identifiers: first_name + last_name + company_domain + linkedin_url.",
+        "tip": (
+            "Tried all 10 providers. "
+            "Coverage gaps are common for personal/SMB domains or very senior executives. "
+            "Try phone enrichment via Forager (reveal_phones=True) or engage via LinkedIn instead."
+        ),
     }
 
 
