@@ -31,6 +31,9 @@ All data comes from tool calls — never invent names, emails, LinkedIn URLs, ph
 • Scrape many LinkedIn profiles → `deepline_call` → `apify_run_actor` with a LinkedIn scraper actor, or `crustdata_people_enrich` in bulk
 • Add a lead to Lemlist campaign → `lemlist_add_to_campaign` with `{"campaignId": "...", "email": "...", "firstName": "...", "lastName": "..."}`
 • Check Lemlist campaign stats → `lemlist_list_campaigns` or `lemlist_get_campaign_stats`
+• Lemlist replies received (inbox) → `lemlist_get_activities` with `{"type": "emailsReplied", "limit": 10}` — no user_id needed, returns full reply content + sender email
+• Lemlist inbox threads → `lemlist_list_inbox` with `{"user_id": "<id>", "limit": 10}` — get user_id from `createdBy` field in any `lemlist_get_activities` response first
+• Lemlist sent not yet replied → call `lemlist_get_activities` `{"type": "emailsSent", "limit": 50}` then `{"type": "emailsReplied", "limit": 50}`, find sent emailIds not in replied set
 • Add lead to Instantly → `instantly_add_to_campaign`
 • Scrape a website → `firecrawl_scrape` with `{"url": "..."}`
 • Look up tech stack → `builtwith_domain_lookup` with `{"domain": "..."}`
