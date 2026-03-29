@@ -55,12 +55,41 @@ CORE_SKILL_DOCS = [
     ("provider-playbooks/deeplineagent.md", "DeeplineAgent playbook — AI inference, custom logic steps"),
     ("provider-playbooks/ai_ark.md", "AI Ark playbook — email finder, people search, mobile phone"),
     ("provider-playbooks/cloudflare.md", "Cloudflare playbook — domain crawl and intelligence"),
+    # Local skills (not from CDN)
+    # /last30days is handled inline — see LOCAL_SKILL_DOCS below
     # Recipes
     ("recipes/build-tam.md", "TAM build recipe — account + contact sourcing from scratch"),
     ("recipes/linkedin-url-lookup.md", "LinkedIn URL lookup recipe — resolve profiles from name/company"),
     ("recipes/portfolio-prospecting.md", "Portfolio prospecting recipe — VC/PE portfolio company outreach"),
     ("actor-contracts.md", "Apify actor contracts — validated actor IDs and payload schemas"),
 ]
+
+
+LOCAL_SKILL_DOCS = """## Skill doc: /last30days — recently hired contacts search
+
+**Trigger**: User types `/last30days [criteria]` or asks for "recent hires" / "hired in last 30 days".
+
+**What to do**:
+1. Call `search_prospects` with `recently_hired_months=1` plus any filters the user provided.
+   - This routes to Icypeas, which has native hire-date filtering.
+   - Dropleads does NOT support this filter — always use Icypeas via `recently_hired_months`.
+2. For city-level location (e.g. NYC, San Francisco), also pass `person_location` — Icypeas handles both together.
+3. Return the full result table with name, title, company, LinkedIn URL.
+4. Suggest next step: enrich emails for the contacts found.
+
+**Example call**:
+```
+search_prospects(
+    job_title="VP of Sales",
+    job_level="VP",
+    geo="United States",
+    industry="SaaS",
+    recently_hired_months=1
+)
+```
+
+**Why this matters**: Recently hired VPs, Directors, and C-Suite are in "new job" mode — high intent to buy new tools, build new teams, and change vendors. This is one of the highest-signal prospecting triggers in GTM.
+"""
 
 
 async def _fetch(url: str) -> str:
@@ -93,9 +122,12 @@ async def load_skill_docs() -> str:
 
     logger.info("Loaded %d/%d skill docs", loaded, len(CORE_SKILL_DOCS))
 
+    # Append local skill docs (not from CDN)
+    sections.append(f"## Skill doc: /last30days workflow\n\n{LOCAL_SKILL_DOCS}")
+
     if sections:
         return "\n\n---\n\n".join(sections)
-    return ""
+    return LOCAL_SKILL_DOCS
 
 
 # Sync wrapper for use at startup (before event loop)

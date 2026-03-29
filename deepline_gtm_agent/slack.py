@@ -24,6 +24,8 @@ from typing import Any
 
 import httpx
 
+from deepline_gtm_agent.redis_client import append_history, get_history
+
 logger = logging.getLogger(__name__)
 
 
@@ -207,11 +209,26 @@ async def remove_reaction(channel: str, ts: str, emoji: str, token: str) -> None
 
 
 def _extract_text(event: dict) -> str:
-    """Strip bot mention prefix from message text."""
+    """Strip bot mention prefix and expand slash-command shortcuts."""
     text = event.get("text", "").strip()
     # Remove <@BOTID> mention prefix if present
     if text.startswith("<@"):
         text = text.split(">", 1)[-1].strip()
+
+    # /last30days [criteria] — expand into a full prospect search prompt
+    if text.lower().startswith("/last30days"):
+        rest = text[len("/last30days"):].strip()
+        if rest:
+            text = (
+                f"Find {rest} that were recently hired or started a new role in the last 30 days. "
+                "Use recently_hired_months=1 when calling search_prospects."
+            )
+        else:
+            text = (
+                "Search for contacts that were recently hired or started a new role in the last 30 days "
+                "matching my ideal customer profile. Use recently_hired_months=1 in the search."
+            )
+
     return text
 
 
@@ -223,8 +240,6 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
     agent_fn: async callable that takes a list of messages and returns a reply string.
     Conversation history is persisted in Redis (7-day TTL) with in-memory fallback.
     """
-    from deepline_gtm_agent.redis_client import append_history, get_history
-
     event = payload.get("event", {})
     event_type = event.get("type", "")
     event_id = payload.get("event_id", "")

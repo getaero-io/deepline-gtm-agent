@@ -14,8 +14,6 @@ dependencies = [
     "langchain-anthropic>=1.4",
     "langchain-openai>=0.3",
     "httpx>=0.28",
-    "redis>=5.0",
-    "langgraph-checkpoint-redis>=0.0.6",
 ]
 
 [project.urls]
@@ -24,6 +22,7 @@ Documentation = "https://docs.deepline.com"
 
 [project.optional-dependencies]
 server = ["fastapi>=0.115", "uvicorn>=0.32", "python-multipart>=0.0.12"]
+redis = ["redis>=5.0", "langgraph-checkpoint-redis>=0.0.6"]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
 [tool.hatch.build.targets.wheel]

@@ -243,7 +243,8 @@ def make_deepline_call_tool(catalog: Optional[list[dict]] = None) -> StructuredT
         + catalog_text
     )
 
-    def _call(tool_id: str, payload: dict = {}) -> Any:
+    def _call(tool_id: str, payload: dict | None = None) -> Any:
+        payload = payload or {}
         try:
             return deepline_execute(tool_id, payload)
         except Exception as e:

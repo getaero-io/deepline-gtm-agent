@@ -11,6 +11,7 @@ Endpoints:
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
@@ -22,7 +23,6 @@ from pydantic import BaseModel
 from deepline_gtm_agent import create_gtm_agent
 from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.dynamic_tools import load_tool_catalog
-from deepline_gtm_agent.redis_client import make_checkpointer
 import httpx
 
 from deepline_gtm_agent.slack import (
@@ -45,7 +45,51 @@ async def require_api_key(credentials: HTTPAuthorizationCredentials = Depends(_b
     if _API_KEY and (not credentials or credentials.credentials != _API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-app = FastAPI(title="Deepline GTM Agent", version="0.1.0")
+
+# ---------------------------------------------------------------------------
+# Agent singleton — built once at startup with live skill docs
+# ---------------------------------------------------------------------------
+
+_agent = None
+_skill_docs: str = ""
+_tool_catalog: list[dict] = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load Deepline skill docs and tool catalog once at startup."""
+    global _skill_docs, _tool_catalog, _agent
+    import asyncio
+
+    logger.info("Loading Deepline skill docs and tool catalog...")
+
+    skill_task = asyncio.create_task(load_skill_docs())
+    loop = asyncio.get_event_loop()
+    catalog_task = loop.run_in_executor(None, load_tool_catalog)
+    _skill_docs, _tool_catalog = await asyncio.gather(skill_task, catalog_task)
+
+    doc_count = _skill_docs.count("## Skill doc:")
+    logger.info(
+        "Loaded %d skill docs (%.1f KB) and %d tools in catalog",
+        doc_count, len(_skill_docs) / 1024, len(_tool_catalog),
+    )
+
+    model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
+    _agent = create_gtm_agent(
+        model=model,
+        skill_docs=_skill_docs or None,
+        tool_catalog=_tool_catalog or None,
+    )
+    logger.info(
+        "Agent ready (model=%s, skills=%s, tools=%d)",
+        model,
+        "loaded" if _skill_docs else "unavailable",
+        len(_tool_catalog),
+    )
+    yield
+
+
+app = FastAPI(title="Deepline GTM Agent", version="0.1.0", lifespan=lifespan)
 
 # CORS: defaults to open for local dev.
 # Set CORS_ORIGINS="https://your-app.com,https://other.com" in production.
@@ -59,63 +103,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# ---------------------------------------------------------------------------
-# Agent singleton — built once at startup with live skill docs
-# ---------------------------------------------------------------------------
-
-_agent = None
-_skill_docs: str = ""
-_tool_catalog: list[dict] = []
-_checkpointer = None
-
-
-@app.on_event("startup")
-async def startup():
-    """
-    Fetch Deepline skill docs + tool catalog at startup.
-    Also initialises the Redis checkpointer for persistent conversation memory.
-    """
-    global _skill_docs, _tool_catalog, _agent, _checkpointer
-    import asyncio
-
-    logger.info("Loading Deepline skill docs, tool catalog, and checkpointer...")
-
-    # Load skill docs (async HTTP) and tool catalog (sync subprocess) concurrently
-    skill_task = asyncio.create_task(load_skill_docs())
-    loop = asyncio.get_event_loop()
-    catalog_task = loop.run_in_executor(None, load_tool_catalog)
-    _skill_docs, _tool_catalog = await asyncio.gather(skill_task, catalog_task)
-
-    doc_count = _skill_docs.count("## Skill doc:")
-    logger.info(
-        "Loaded %d skill docs (%.1f KB) and %d tools in catalog",
-        doc_count, len(_skill_docs) / 1024, len(_tool_catalog),
-    )
-
-    # Init LangGraph checkpointer (Redis if REDIS_URL set, else MemorySaver)
-    _checkpointer = make_checkpointer()
-    # AsyncRedisSaver requires explicit setup
-    if _checkpointer is not None:
-        try:
-            await _checkpointer.__aenter__()
-        except Exception:
-            pass  # MemorySaver doesn't need setup; AsyncRedisSaver does
-
-    model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
-    _agent = create_gtm_agent(
-        model=model,
-        skill_docs=_skill_docs or None,
-        tool_catalog=_tool_catalog or None,
-        checkpointer=_checkpointer,
-    )
-    logger.info(
-        "Agent ready (model=%s, skills=%s, tools=%d, memory=%s)",
-        model,
-        "loaded" if _skill_docs else "unavailable",
-        len(_tool_catalog),
-        type(_checkpointer).__name__ if _checkpointer else "none",
-    )
-
 
 def get_agent():
     global _agent
@@ -125,7 +112,6 @@ def get_agent():
             model=model,
             skill_docs=_skill_docs or None,
             tool_catalog=_tool_catalog or None,
-            checkpointer=_checkpointer,
         )
     return _agent
 
@@ -133,12 +119,12 @@ def get_agent():
 async def run_agent(messages: list[dict], thread_id: str | None = None) -> str:
     """Run the GTM agent and return a plain text reply.
 
-    thread_id: when provided, the LangGraph checkpointer persists state across
-    calls with the same thread_id — enabling true multi-turn memory.
+    thread_id: reserved for future use (e.g. LangGraph checkpointer). Conversation
+    history is currently managed by redis_client per-thread, not by the agent graph.
     """
     agent = get_agent()
-    config = {"configurable": {"thread_id": thread_id}} if thread_id else {}
-    result = await agent.ainvoke({"messages": messages}, config=config or None)
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+    result = await agent.ainvoke({"messages": messages}, config=config)
     last = result["messages"][-1]
     content = last.content
     if isinstance(content, list):
@@ -201,15 +187,13 @@ async def chat_stream(req: ChatRequest):
     agent = get_agent()
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
 
-    config = {}
-    if req.thread_id:
-        config["configurable"] = {"thread_id": req.thread_id}
+    config = {"configurable": {"thread_id": req.thread_id}} if req.thread_id else None
 
     async def event_generator() -> AsyncIterator[str]:
         try:
             async for chunk in agent.astream(
                 {"messages": messages},
-                config=config or None,
+                config=config,
                 stream_mode="messages",
             ):
                 if isinstance(chunk, tuple):

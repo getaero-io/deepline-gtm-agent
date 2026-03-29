@@ -53,7 +53,6 @@ def create_gtm_agent(
     extra_tools: Optional[Sequence[BaseTool | Callable | dict[str, Any]]] = None,
     skill_docs: Optional[str] = None,
     tool_catalog: Optional[list[dict]] = None,
-    checkpointer: Any = None,
     **kwargs: Any,
 ):
     """
@@ -74,7 +73,7 @@ def create_gtm_agent(
         extra_tools: Additional tool functions to register alongside Deepline tools.
         skill_docs: Pre-fetched Deepline skill docs string (injected at startup by server.py).
         tool_catalog: Pre-fetched Deepline tool catalog list (injected at startup by server.py).
-        **kwargs: Forwarded to `create_deep_agent` (e.g. checkpointer, store, debug).
+        **kwargs: Forwarded to `create_deep_agent` (e.g. store, debug).
 
     Returns:
         A compiled LangGraph StateGraph ready to invoke.
@@ -116,9 +115,6 @@ def create_gtm_agent(
             "Treat them as authoritative.\n\n"
             f"{skill_docs}"
         )
-
-    if checkpointer is not None:
-        kwargs["checkpointer"] = checkpointer
 
     return create_deep_agent(
         model=model,
