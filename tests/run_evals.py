@@ -142,22 +142,17 @@ async def run_agent_direct(
     """
     Invoke the GTM agent directly via Python and return (reply, tool_calls).
 
-    Patches deepline_execute to record all Deepline API calls made during the run.
-    When mock_api=True, returns dummy results instead of hitting live APIs.
+    Extracts tool calls from LangGraph message history (reliable) and patches
+    deepline_execute to record Deepline API sub-calls (for tool_id tracking).
     """
-    # Import here to avoid loading at module level (slow)
-    from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
+    from deepline_gtm_agent.dynamic_tools import load_tool_catalog
     from deepline_gtm_agent import create_gtm_agent
     import deepline_gtm_agent.deepline as dl_module
-    import deepline_gtm_agent.tools as tools_module
 
-    # Track high-level tool calls by wrapping each tool's underlying function
-    high_level_calls: list[str] = []
     original_execute = dl_module.deepline_execute
 
     def tracking_execute(operation: str, payload: dict) -> dict:
         if mock_api:
-            # Return plausible dummy data instead of hitting the API
             result = _mock_response(operation, payload)
             capture.calls.append(ToolCallRecord(
                 tool_name="deepline_call",
@@ -166,64 +161,57 @@ async def run_agent_direct(
                 result_keys=list(result.keys()),
             ))
             return result
-        else:
-            try:
-                result = original_execute(operation, payload)
-            except Exception as e:
-                capture.calls.append(ToolCallRecord(
-                    tool_name="deepline_call",
-                    tool_id=operation,
-                    payload_keys=list(payload.keys()),
-                    error=str(e),
-                ))
-                raise
+        try:
+            result = original_execute(operation, payload)
+        except Exception as e:
             capture.calls.append(ToolCallRecord(
                 tool_name="deepline_call",
                 tool_id=operation,
                 payload_keys=list(payload.keys()),
-                result_keys=list(result.keys()) if isinstance(result, dict) else [],
+                error=str(e),
             ))
-            return result
+            raise
+        capture.calls.append(ToolCallRecord(
+            tool_name="deepline_call",
+            tool_id=operation,
+            payload_keys=list(payload.keys()),
+            result_keys=list(result.keys()) if isinstance(result, dict) else [],
+        ))
+        return result
 
-    # Also wrap high-level tool functions to track which ones the agent picked
-    def _wrap_tool(fn, name):
-        async def async_wrapper(*args, **kwargs):
-            high_level_calls.append(name)
-            return await fn(*args, **kwargs) if asyncio.iscoroutinefunction(fn) else fn(*args, **kwargs)
-        def sync_wrapper(*args, **kwargs):
-            high_level_calls.append(name)
-            return fn(*args, **kwargs)
-        return async_wrapper if asyncio.iscoroutinefunction(fn) else sync_wrapper
+    with patch.object(dl_module, "deepline_execute", tracking_execute):
+        catalog = load_tool_catalog()
+        model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
+        agent = create_gtm_agent(model=model, tool_catalog=catalog)
+        result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
 
-    import deepline_gtm_agent.tools as tools_mod
-    original_fns = {}
-    for fname in ["enrich_person", "waterfall_enrich", "search_prospects", "research_company",
-                   "web_research", "verify_email", "find_linkedin", "search_companies"]:
-        original_fns[fname] = getattr(tools_mod, fname)
-        setattr(tools_mod, fname, _wrap_tool(original_fns[fname], fname))
+    # ── Extract tool calls from LangGraph message history ─────────────────────
+    # LangChain records every AIMessage.tool_calls in the state, giving us
+    # authoritative tool names regardless of how functions are imported.
+    for msg in result["messages"]:
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            for tc in tool_calls:
+                name = tc.get("name", "")
+                args = tc.get("args", {})
+                if name == "deepline_call":
+                    # Already tracked via tracking_execute; skip to avoid duplication
+                    continue
+                capture.calls.insert(0, ToolCallRecord(
+                    tool_name=name,
+                    payload_keys=list(args.keys()),
+                ))
 
-    try:
-        with patch.object(dl_module, "deepline_execute", tracking_execute):
-            catalog = load_tool_catalog()
-            agent = create_gtm_agent(tool_catalog=catalog)
-            result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
-            last = result["messages"][-1]
-            content = last.content
-            if isinstance(content, list):
-                reply = "".join(
-                    block["text"] if isinstance(block, dict) else str(block)
-                    for block in content
-                    if not isinstance(block, dict) or block.get("type") == "text"
-                )
-            else:
-                reply = str(content)
-    finally:
-        for fname, fn in original_fns.items():
-            setattr(tools_mod, fname, fn)
-
-    # Merge high-level tool calls into capture
-    for name in high_level_calls:
-        capture.calls.insert(0, ToolCallRecord(tool_name=name))
+    last = result["messages"][-1]
+    content = last.content
+    if isinstance(content, list):
+        reply = "".join(
+            block["text"] if isinstance(block, dict) else str(block)
+            for block in content
+            if not isinstance(block, dict) or block.get("type") == "text"
+        )
+    else:
+        reply = str(content)
 
     if verbose:
         print(f"\n  Reply: {reply[:300]}")

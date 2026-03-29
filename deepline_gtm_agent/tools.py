@@ -306,14 +306,27 @@ def search_prospects(
         filters["industries"] = [company_industry]
 
     city_hint = filters.pop("_city_hint", None)
-    try:
-        result = deepline_execute("dropleads_search_people", {
-            "filters": filters,
+
+    def _run_dropleads(f: dict) -> list:
+        r = deepline_execute("dropleads_search_people", {
+            "filters": f,
             "pagination": {"page": 1, "limit": min(limit, 25)},
         })
-        leads = (result.get("data") or result).get("leads", [])[:limit]
+        return (r.get("data") or r).get("leads", [])[:limit], (r.get("data") or r).get("total", 0)
+
+    industry_dropped = False
+    try:
+        leads, total = _run_dropleads(filters)
+        # Dropleads industry taxonomy is narrow — if 0 results with industry filter, retry without it
+        if not leads and "industries" in filters:
+            filters_no_industry = {k: v for k, v in filters.items() if k != "industries"}
+            leads, total = _run_dropleads(filters_no_industry)
+            if leads:
+                industry_dropped = True
         if leads:
             notes = []
+            if industry_dropped:
+                notes.append(f"Dropleads has no exact match for industry '{company_industry}' — searched without industry filter")
             if recently_hired_months:
                 notes.append(f"Dropleads has no hire-date filter — results are not filtered to last {recently_hired_months} months")
             if city_hint:
@@ -321,7 +334,7 @@ def search_prospects(
             return {
                 "provider": "dropleads",
                 "title_variants_tried": title_variants,
-                "total": (result.get("data") or result).get("total", len(leads)),
+                "total": total,
                 "count": len(leads),
                 "note": "; ".join(notes) if notes else None,
                 "prospects": [
