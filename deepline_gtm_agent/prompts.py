@@ -29,15 +29,15 @@ All data comes from tool calls — never invent names, emails, LinkedIn URLs, ph
 
 • Scrape a LinkedIn profile → `dropleads_single_person_enrichment` or `crustdata_person_enrichment` with `{"linkedinProfileUrl": "..."}`
 • Scrape many LinkedIn profiles → `deepline_call` → `apify_run_actor` with a LinkedIn scraper actor, or `crustdata_people_enrich` in bulk
-• Add a lead to Lemlist campaign → `lemlist_add_lead_to_campaign` with `{"campaignId": "...", "email": "...", "firstName": "...", "lastName": "..."}`
-• Check Lemlist campaign status → `lemlist_list_campaigns` or `lemlist_get_campaign`
-• Add lead to Instantly → `instantly_add_lead_to_campaign`
+• Add a lead to Lemlist campaign → `lemlist_add_to_campaign` with `{"campaignId": "...", "email": "...", "firstName": "...", "lastName": "..."}`
+• Check Lemlist campaign stats → `lemlist_list_campaigns` or `lemlist_get_campaign_stats`
+• Add lead to Instantly → `instantly_add_to_campaign`
 • Scrape a website → `firecrawl_scrape` with `{"url": "..."}`
-• Look up tech stack → `builtwith_lookup` with `{"domain": "..."}`
+• Look up tech stack → `builtwith_domain_lookup` with `{"domain": "..."}`
 • Look up ads → `adyntel_google` or `adyntel_facebook` with company domain
 • Write a HubSpot note → `hubspot_create_note`
 • Create a HubSpot deal → `hubspot_create_deal`
-• SOQL query Salesforce → `salesforce_query` with `{"soql": "SELECT ... FROM ..."}`
+• Salesforce contacts → `salesforce_list_contacts` | leads → `salesforce_list_leads` | accounts → `salesforce_list_accounts`
 
 When the user asks for something that isn't in this list, look at the catalog in `deepline_call` — there are 441 tools, it's almost certainly there.
 
@@ -68,7 +68,7 @@ N. *Name* | Title | Company | Location
 *Email enrichment — exhaust the waterfall*
 
 Use `waterfall_enrich` first — runs 10 providers automatically. If still missing, continue:
-`dropleads_single_person_enrichment` → `deepline_native_enrich_contact` → `icypeas_email_search` → `prospeo_person_enrichment` → `ai_ark_email_finder` → `peopledatalabs_person_enrichment` → `forager_person_role_search`
+`dropleads_single_person_enrichment` → `deepline_native_enrich_contact` → `icypeas_email_search` → `prospeo_enrich_person` → `ai_ark_find_emails` → `peopledatalabs_person_search` → `forager_person_role_search`
 
 Only report "not found" after exhausting all providers. State which you tried.
 
@@ -82,8 +82,8 @@ Only report "not found" after exhausting all providers. State which you tried.
 
 • HubSpot contacts: `hubspot_search_objects` `{"objectType": "contacts", "limit": 10}`
 • HubSpot deals: `hubspot_search_objects` `{"objectType": "deals", "limit": 10}`
-• Salesforce leads: `salesforce_query` `{"soql": "SELECT Id, Name, Email FROM Lead LIMIT 10"}`
-• Salesforce contacts: `salesforce_query` `{"soql": "SELECT Id, Name, Email FROM Contact LIMIT 10"}`
+• Salesforce leads: `salesforce_list_leads` `{"limit": 10}`
+• Salesforce contacts: `salesforce_list_contacts` `{"limit": 10}`
 • Attio contacts/people: `attio_query_person_records` `{"limit": 10}`
 • Attio companies: `attio_query_company_records` `{"limit": 10}`
 • Attio list entries: `attio_query_entries` `{"list": "<list-slug>", "limit": 10}`
