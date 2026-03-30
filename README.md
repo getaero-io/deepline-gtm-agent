@@ -2,7 +2,7 @@
 
 Open-source GTM agent built on [Deepline](https://deepline.com) + [Deep Agents](https://github.com/langchain-ai/deepagents) (LangGraph).
 
-This is a reference implementation — a working starter kit you can deploy as-is or fork and extend. Deepline handles the data layer (30+ enrichment and outreach providers). Deep Agents handles the orchestration (LangGraph-powered agent loop). You write the business logic.
+This is a reference implementation — a working starter kit you can deploy as-is or fork and extend. Deepline handles the data layer (441+ integrations across enrichment, CRM, and outreach). Deep Agents handles the orchestration (LangGraph-powered agent loop). You write the business logic.
 
 Inspired by ["How we built LangChain's GTM Agent"](https://blog.langchain.com/how-we-built-langchains-gtm-agent/) — this repo is the Deepline-powered version of that architecture, deployable in minutes.
 
@@ -13,18 +13,20 @@ Inspired by ["How we built LangChain's GTM Agent"](https://blog.langchain.com/ho
 
 ## What it does
 
-The agent handles six core GTM workflows, each backed by a waterfall of data providers:
+The agent handles core GTM workflows, each backed by a waterfall of data providers:
 
 | Workflow | What you ask | What happens |
 |---|---|---|
-| **Enrich contacts** | "Find the email for Jane Smith at Acme" | Apollo → Hunter → Crustdata waterfall; returns verified email, phone, title, LinkedIn |
-| **Search prospects** | "Find 10 VP of Sales at B2B SaaS, 200–500 employees, US" | Dropleads primary → Deepline Native Prospector fallback; returns name, title, company, LinkedIn, email |
-| **Research accounts** | "Research stripe.com" | Apollo → Crustdata → Exa web; returns description, headcount, funding, tech stack, HQ |
+| **Enrich contacts** | "Find the email for Jane Smith at Acme" | 10-provider waterfall: Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → AI Ark → PDL → Forager |
+| **Search prospects** | "Find 10 VP of Sales at B2B SaaS, 200–500 employees, US" | Dropleads (free, broad) → Icypeas (recently-hired filter) → Deepline Native (domain-specific) |
+| **Research accounts** | "Research stripe.com" | Crustdata → Exa web; returns description, headcount, funding, tech stack, HQ |
 | **Verify emails** | "Is jsmith@acme.com safe to send?" | LeadMagic → ZeroBounce; returns valid/invalid + MX provider + sub-status |
-| **Find LinkedIn URLs** | "LinkedIn for Tom Nguyen at Notion" | Apollo people match → Apollo search; returns URL + confidence level |
+| **Find LinkedIn URLs** | "LinkedIn for Tom Nguyen at Notion" | Deepline Native Prospector → Exa web; returns URL + confidence level |
 | **Build company lists** | "Find 25 fintech companies in NYC, 100–500 employees" | Apollo company search; returns name, domain, headcount, industry, description |
+| **CRM read/write** | "Create a HubSpot contact for Jane Doe" | Full HubSpot, Salesforce, and Attio access via `deepline_call` |
+| **Outreach** | "Show me my Lemlist campaigns" | Instantly, Lemlist, Smartlead, HeyReach — full campaign and lead management |
 
-Every response includes a mandatory **Sources & Confidence** section: which providers ran, what came back verified vs. missing, and a recommended next step. The agent is explicit about data gaps — it won't invent emails or paper over obfuscated last names.
+Every response includes a **Sources** section: which providers ran and a recommended next step. The agent is explicit about data gaps — it won't invent emails or paper over missing data.
 
 ---
 
@@ -36,23 +38,28 @@ Your query
     ▼
 Deep Agents (LangGraph)          ← orchestration, tool-calling, conversation memory
     │  model: claude-opus-4-6 / gpt-4o / gemini-2.0-flash
-    │  tools: search_prospects, enrich_person, verify_email, ...
     │
-    │  System prompt includes live Deepline skill docs fetched at startup —
-    │  the agent knows each provider's filter syntax, known pitfalls, and
-    │  exact waterfall order without you hardcoding any of that.
+    │  8 high-level tools: waterfall_enrich, enrich_person, search_prospects,
+    │    research_company, web_research, verify_email, find_linkedin, search_companies
+    │
+    │  + deepline_call: passthrough to all 441+ Deepline integrations
+    │    (HubSpot, Salesforce, Attio, Lemlist, Instantly, Smartlead, HeyReach,
+    │     Apollo, Crustdata, Firecrawl, Apify, Exa, BuiltWith, Adyntel, …)
     │
     ▼
-Deepline API (code.deepline.com) ← single key, 30+ providers underneath
+Deepline API (code.deepline.com) ← single key, 441+ integrations underneath
     │
     ├── Dropleads       (person search — free, broad coverage)
-    ├── Apollo          (person + company enrichment and search)
     ├── Hunter          (domain-level email pattern discovery)
-    ├── LeadMagic       (email verification)
-    ├── ZeroBounce      (email verification fallback)
+    ├── LeadMagic       (email + mobile finding, validation)
     ├── Crustdata       (LinkedIn-native enrichment, headcount signals)
+    ├── Icypeas         (email search, recently-hired filtering)
+    ├── Prospeo         (person enrichment, 30+ search filters)
+    ├── AI Ark          (email finding, person & company search)
+    ├── People Data Labs (deep person & company enrichment)
+    ├── Forager         (person & company data, phone recovery)
     ├── Exa             (live web research — news, bios, job postings)
-    └── ... 25+ more
+    └── ... 430+ more (CRM, outreach, scraping, ad intelligence)
 ```
 
 You don't manage individual provider keys or handle fallback logic — Deepline does that. One API key, one bill, one place to add providers.
@@ -61,16 +68,15 @@ You don't manage individual provider keys or handle fallback logic — Deepline 
 
 The agent is a compiled LangGraph `StateGraph` returned by `create_gtm_agent()`. Each invocation runs:
 
-1. Model receives user message + full conversation history + system prompt (with injected skill docs)
+1. Model receives user message + full conversation history + system prompt
 2. Model decides which tool(s) to call and with what parameters
-3. Tools execute — each tool runs its own provider waterfall internally
+3. Tools execute — each high-level tool runs its own provider waterfall internally; `deepline_call` routes directly to any of the 441 integrations
 4. Model receives tool results and either calls more tools or writes the final response
-5. Final response always includes the structured Sources & Confidence section
 
-This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Deep Agents framework adds a planning tool, filesystem offloading for large context, and subagent spawning — though this reference implementation uses the basic loop. See the [deepagents docs](https://github.com/langchain-ai/deepagents) if you want to extend it.
+This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Deep Agents framework handles the state machine, tool routing, and conversation persistence.
 
 <details>
-<summary><strong>All 30+ providers</strong></summary>
+<summary><strong>All providers</strong></summary>
 
 **Data & Enrichment**
 
@@ -78,20 +84,20 @@ This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Dee
 |---|---|
 | [Crustdata](https://crustdata.com) | LinkedIn-native person & company enrichment, headcount signals |
 | [People Data Labs](https://www.peopledatalabs.com) | Deep person & company enrichment, bulk operations |
-| [Forager](https://forager.ai) | Person, company, and job data |
-| [Prospeo](https://prospeo.io) | Person & company enrichment, email finding |
-| [Apollo](https://apollo.io) | Person & company enrichment, search (BYOK) |
-| [Dropleads](https://dropleads.io) | Person enrichment, email finding & verification |
+| [Forager](https://forager.ai) | Person, company, and job data; strong for phone recovery |
+| [Prospeo](https://prospeo.io) | Person & company enrichment, email finding, 30+ search filters |
+| [Apollo](https://apollo.io) | Person & company enrichment, search |
+| [Dropleads](https://dropleads.io) | Person search, email finding — free tier, broad coverage |
+| [Icypeas](https://icypeas.com) | Email search, recently-hired filtering, profile scraping |
+| [AI Ark](https://aiark.ai) | Email finding, person & company search |
 
 **Email Finding & Verification**
 
 | Provider | What it does |
 |---|---|
 | [Hunter](https://hunter.io) | Domain search, email finding, email verification |
-| [Icypeas](https://icypeas.com) | Email search, verification, profile & company scraping |
 | [Leadmagic](https://leadmagic.io) | Email & mobile finding, validation, job change detection |
 | [ZeroBounce](https://zerobounce.net) | Email finding, batch validation, domain search |
-| [AI Ark](https://aiark.ai) | Email finding, person & company search, personality analysis |
 
 **Web & Research**
 
@@ -99,7 +105,7 @@ This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Dee
 |---|---|
 | [Exa](https://exa.ai) | AI-powered web search, company & people search, content extraction |
 | [Firecrawl](https://firecrawl.dev) | Web scraping, crawling, structured extraction |
-| [Parallel](https://parallel.ai) | AI-powered web research tasks |
+| [Apify](https://apify.com) | LinkedIn scraper, Google Maps, custom actors |
 | [Google Search](https://developers.google.com/custom-search) | Custom web search |
 
 **Ad Intelligence**
@@ -107,6 +113,7 @@ This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Dee
 | Provider | What it does |
 |---|---|
 | [Adyntel](https://adyntel.com) | Facebook, Google, TikTok ad monitoring & keyword tracking |
+| [BuiltWith](https://builtwith.com) | Tech stack detection |
 
 **Sequencers & Outreach**
 
@@ -117,15 +124,14 @@ This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Dee
 | [SmartLead](https://smartlead.ai) | Email campaign management |
 | [HeyReach](https://heyreach.io) | LinkedIn outreach campaign management |
 
-**CRM & Data Warehouse**
+**CRM & Data**
 
 | Provider | What it does |
 |---|---|
-| [HubSpot](https://hubspot.com) | CRM — read/write contacts, companies, deals |
-| [Attio](https://attio.com) | CRM — contact and company records |
-| [Salesforce](https://salesforce.com) | CRM — full object model access |
+| [HubSpot](https://hubspot.com) | CRM — read/write contacts, companies, deals, notes, tasks |
+| [Attio](https://attio.com) | CRM — contacts, companies, list entries |
+| [Salesforce](https://salesforce.com) | CRM — leads, contacts, accounts, opportunities |
 | [Snowflake](https://snowflake.com) | Direct SQL queries against your data warehouse |
-| [BuiltWith](https://builtwith.com) | Tech stack detection |
 
 </details>
 
@@ -166,17 +172,17 @@ curl -X POST http://localhost:8000/chat \
 
 ### Slack bot
 
-DM the bot or @-mention it in any channel. Replies in-thread, maintains conversation history per thread.
+DM the bot or @-mention it in any channel. Replies in-thread, maintains conversation history per thread (Redis-backed with 7-day TTL, falls back to in-memory without Redis).
 
 ```
 @Deepline GTM Agent find 5 VP of Sales at B2B SaaS, 200–500 employees, US
 ```
 
-→ See [Slack setup](#slack-setup) below.
+→ See [Slack setup](#deploy--slack-setup) below.
 
 ### Chat UI
 
-Open `chat.html` in any browser. Pre-loaded with 6 workflow templates.
+Open `chat.html` in any browser. Pre-loaded with workflow templates.
 
 ### REST API
 
@@ -212,21 +218,33 @@ print(result["messages"][-1].content)
 
 ## Tools
 
-Seven tools are registered on the agent. Each is a plain Python function — Deep Agents auto-generates the tool schema from the type annotations and docstring.
+Nine tools are registered on the agent. The eight high-level tools handle common GTM workflows with built-in waterfalls. `deepline_call` is a passthrough to all 441+ Deepline integrations — CRM, outreach, scraping, and anything not covered by a dedicated tool.
 
-### `enrich_person`
+### `waterfall_enrich`
 
-**When to use:** You have a contact and need their work email, phone, or LinkedIn URL.
+**When to use:** You have any combination of name, LinkedIn URL, email, or company — and want the best possible email result without thinking about provider selection.
 
 **Inputs:** At least one of `linkedin_url`, `email`, or `first_name + last_name`. Optionally `company_domain` or `company_name`.
 
-**Waterfall:** Apollo people_match → Hunter combined_find (if domain + name) → Crustdata enrichment (if LinkedIn URL)
+**Waterfall (10 providers, stops on first hit):** Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → AI Ark → PeopleDataLabs → Forager
+
+**Returns:** `{email, phone, linkedin_url, title, company, location, provider, providers_tried}`
+
+**Use this over `enrich_person`** for bulk enrichment or when you want Deepline to handle provider selection automatically.
+
+---
+
+### `enrich_person`
+
+**When to use:** You have a contact and need their work email, phone, or LinkedIn URL. Use when you want predictable provider routing.
+
+**Inputs:** At least one of `linkedin_url`, `email`, or `first_name + last_name`. Optionally `company_domain` or `company_name`.
+
+**Waterfall:** Hunter (domain + name) → Crustdata (LinkedIn URL) → Deepline Native Prospector (domain)
 
 **Returns:** `{email, phone, title, company, linkedin_url, location, provider}`
 
-**Cost:** ~0.17 credits/match
-
-**Limitations:** Apollo free tier obfuscates last names on search results — use `enrich_person` with the exact name + domain to get around this.
+**Limitations:** Fewer providers than `waterfall_enrich` — use `waterfall_enrich` for better coverage.
 
 ---
 
@@ -234,17 +252,23 @@ Seven tools are registered on the agent. Each is a plain Python function — Dee
 
 **When to use:** You need a list of people matching ICP criteria (title, seniority, location, company size, industry).
 
-**Inputs:** Any combination of `job_title`, `job_level`, `company_name`, `company_domain`, `person_location`, `company_size_min`, `company_size_max`, `company_industry`, `limit` (default 10, max 25).
+**Inputs:** Any combination of `job_title`, `job_level`, `company_name`, `company_domain`, `person_location`, `company_size_min`, `company_size_max`, `company_industry`, `recently_hired_months`, `limit` (default 10, max 25).
 
 `job_level` accepted values: `owner`, `founder`, `c_suite`, `vp`, `director`, `manager`, `individual_contributor`
 
-**Waterfall:** Dropleads (free, broad filters, no per-result cost) → Deepline Native Prospector (domain-specific, returns verified emails, 1.4 credits/result)
+`recently_hired_months`: filter to people who started their current role within this many months — routes to Icypeas which supports job start-date filtering.
+
+`person_location`: accepts country names, US states, or major cities. Cities and states are automatically mapped to country-level for Dropleads; Icypeas accepts city-level directly.
+
+**Waterfall:**
+1. Icypeas (when `recently_hired_months` is set — supports job start-date filtering)
+2. Dropleads (free, broad coverage, automatic title expansion for niche roles)
+3. Deepline Native Prospector (when `company_domain` provided — returns verified emails)
+4. Icypeas fallback (when Dropleads has no coverage)
 
 **Returns:** `{prospects: [{name, title, company, linkedin_url, email, location, company_size, industry, has_email}], count, total, provider}`
 
-**Cost:** Dropleads is free. Deepline Native Prospector (fallback) is 1.4 credits/result.
-
-**Limitations:** Dropleads doesn't always have emails — `has_email` tells you which results have one. Run `enrich_person` on results missing emails if needed.
+**Limitations:** Dropleads filters by country only — city-level filtering falls back to Icypeas. Dropleads industry taxonomy is narrow — if 0 results are returned with an industry filter, the tool retries without it and notes the limitation.
 
 ---
 
@@ -254,13 +278,11 @@ Seven tools are registered on the agent. Each is a plain Python function — Dee
 
 **Inputs:** `domain` (e.g. `"stripe.com"`) or `company_name`.
 
-**Waterfall:** Apollo organization_enrich → Crustdata company_enrichment → Exa web research (live, most current)
+**Waterfall:** Crustdata (LinkedIn-native, headcount signals) → Exa web research (live, most current)
 
 **Returns:** `{name, domain, description, industry, headcount, funding, location, linkedin_url, website, technologies, provider}`
 
-**Cost:** ~0.17 credits/call
-
-**Limitations:** Apollo and Crustdata data can be 6–18 months stale. The Exa fallback hits live web sources and is more current. If headcount signals matter, follow up with `web_research` for recent job postings.
+**Limitations:** Crustdata data can be 6–18 months stale. The Exa fallback hits live web sources and is more current. If headcount signals matter, follow up with `web_research` for recent job postings.
 
 ---
 
@@ -273,10 +295,6 @@ Seven tools are registered on the agent. Each is a plain Python function — Dee
 **Provider:** Exa research (neural web search + content extraction)
 
 **Returns:** `{summary, query, provider}` — structured narrative with citations
-
-**Cost:** Included in Deepline plan
-
-**When the agent uses it automatically:** The system prompt instructs the agent to call `web_research` before `enrich_person` for C-suite title lookups, since database providers often have stale title data.
 
 ---
 
@@ -292,23 +310,21 @@ Seven tools are registered on the agent. Each is a plain Python function — Dee
 
 `safe_to_send` is `False` for valid addresses that are disposable or role-based (e.g. `info@`, `support@`).
 
-**Cost:** Free–low
+Email status guide: `valid` = send • `catch_all` = use with caution • `invalid` = drop • `unknown` = unusable
 
 ---
 
 ### `find_linkedin`
 
-**When to use:** You have a name + company and need the LinkedIn profile URL before enriching.
+**When to use:** You have a name + company and need the LinkedIn profile URL.
 
-**Inputs:** `first_name`, `last_name`, required. `company_name` or `company_domain` optional but strongly recommended to avoid false matches.
+**Inputs:** `first_name`, `last_name` (required). `company_name` or `company_domain` (optional but strongly recommended to avoid false matches).
 
-**Waterfall:** Apollo people_match (high confidence) → Apollo search_people (medium confidence)
+**Waterfall:** Deepline Native Prospector (if domain known, high confidence) → Exa web research (medium confidence)
 
 **Returns:** `{linkedin_url, confidence, provider}` — `confidence` is `"high"`, `"medium"`, or `"none"`
 
-**Cost:** Free
-
-**Limitations:** Without a company, the medium-confidence Apollo search path can return wrong people. Always pass `company_name` or `company_domain` when you have it.
+**Limitations:** Without a company, the Exa path can return wrong people. Always pass `company_name` or `company_domain` when you have it.
 
 ---
 
@@ -318,27 +334,38 @@ Seven tools are registered on the agent. Each is a plain Python function — Dee
 
 **Inputs:** Any combination of `industry`, `location`, `headcount_min`, `headcount_max`, `keywords`, `limit` (default 25, max 25).
 
-**Provider:** Apollo company search (no fallback)
+**Provider:** Apollo company search
 
 **Returns:** `{companies: [{name, domain, headcount, industry, description, location}], count, provider}`
-
-**Cost:** ~0.17 credits/call
 
 **Limitations:** Apollo keyword filtering is broad-match — results may include tangentially related companies. Use `research_company` or `web_research` to validate individual results.
 
 ---
 
-### Cost summary
+### `deepline_call`
 
-| Tool | Primary provider | Fallback | Cost |
-|---|---|---|---|
-| `enrich_person` | Hunter | Crustdata → Deepline Native | free–low |
-| `search_prospects` | Dropleads (free) | Deepline Native Prospector | free / 1.4 credits |
-| `research_company` | Crustdata | Exa | included |
-| `web_research` | Exa | — | included |
-| `verify_email` | LeadMagic | ZeroBounce | free–low |
-| `find_linkedin` | Deepline Native Prospector | Exa | free–low |
-| `search_companies` | Exa | — | included |
+**When to use:** Anything not covered by the eight high-level tools above — CRM operations, outreach campaign management, LinkedIn scraping, ad intelligence, or any of the 441+ Deepline integrations.
+
+**Inputs:** `tool_id` (string), `payload` (dict). The full tool catalog is embedded in the tool's description — the agent selects `tool_id` automatically based on the request.
+
+**Examples of what this covers:**
+
+| Request | tool_id |
+|---|---|
+| Read HubSpot contacts | `hubspot_search_objects` with `{"objectType": "contacts"}` |
+| Create HubSpot deal | `hubspot_create_deal` |
+| List Salesforce leads | `salesforce_list_leads` |
+| Create Salesforce opportunity | `salesforce_create_opportunity` |
+| Read Attio contacts | `attio_query_person_records` |
+| List Lemlist campaigns | `lemlist_list_campaigns` |
+| Check Lemlist replies | `lemlist_get_activities` with `{"type": "emailsReplied"}` |
+| Add lead to Instantly | `instantly_add_to_campaign` |
+| List HeyReach campaigns | `heyreach_list_campaigns` |
+| Scrape a website | `firecrawl_scrape` |
+| Look up tech stack | `builtwith_domain_lookup` |
+| Search Google ads | `adyntel_google` |
+| Run Apollo people search | `apollo_search_people` |
+| Scrape LinkedIn profiles | `apify_run_actor` with a LinkedIn scraper actor |
 
 ---
 
@@ -407,27 +434,20 @@ agent = create_gtm_agent(
 - **Protect the `/chat` endpoints** — set `API_KEY` env var. Clients must send `Authorization: Bearer <key>`.
 - **Restrict CORS** — set `CORS_ORIGINS=https://your-app.com` (comma-separated for multiple origins). Defaults to `*`.
 - **Slack signature verification** — already enforced. Every Slack request is verified with HMAC-SHA256 against your `SLACK_SIGNING_SECRET`. Requests older than 5 minutes are rejected.
-- **Slack OAuth token** — the `/slack/oauth_redirect` endpoint displays the bot token in the browser so you can copy it into Railway. Treat this page like a password: access it once, copy the token, then don't revisit. This is a demo tradeoff — a production multi-tenant app should store the token server-side and never display it.
-- **HTTPS** — required in production. Use Railway's automatic TLS or a reverse proxy (nginx, Caddy). The API key is sent as a bearer token and must not travel over plain HTTP.
+- **Slack OAuth token** — the `/slack/oauth_redirect` endpoint displays the bot token in the browser so you can copy it into Railway. Treat this page like a password: access it once, copy the token, then don't revisit.
+- **HTTPS** — required in production. Railway provides automatic TLS.
 
-**Known limitations of this reference implementation** (out of scope for a demo, relevant if you productionize it):
+**Known limitations of this reference implementation:**
 
-- **Slack conversation history is in-memory** — thread context is lost on restart. A production bot should persist thread history to Redis or a database.
-- **No rate limiting** — the `/chat` endpoints have no per-user or per-IP throttling. Add this at the reverse proxy layer (nginx, Caddy) or via FastAPI middleware if you expose the server publicly.
+- **Slack conversation history** — Redis-backed when `REDIS_URL` is set (7-day TTL per thread). Without Redis, history falls back to in-memory and is lost on restart. Add a Redis plugin in Railway to enable persistence.
+- **No rate limiting** — the `/chat` endpoints have no per-user or per-IP throttling. Add this at the reverse proxy layer or via FastAPI middleware if you expose the server publicly.
 - **Single Slack workspace** — the OAuth flow exchanges a code for a bot token and asks you to set it manually. A multi-workspace distribution would store tokens per team in a database.
 
 ---
 
 ## Example prompts
 
-See [`examples.md`](examples.md) for copy-paste prompts covering:
-
-1. Inbound lead processing
-2. Prospect discovery + enrichment
-3. Account intelligence briefs
-4. Competitive signal scoring
-5. Email personalization at scale
-6. Bulk email verification
+See [`examples.md`](examples.md) for copy-paste prompts covering enrichment, prospecting, account research, CRM operations, outreach management, and email verification.
 
 ---
 

@@ -63,6 +63,17 @@ railway logs
 
 ---
 
+## Redis (optional but recommended for Slack)
+
+Slack conversation history is persisted in Redis with a 7-day TTL per thread. Without Redis, history is in-memory and lost on restart.
+
+**Add Redis on Railway:**
+
+1. Railway dashboard → your project → **New** → **Database** → **Add Redis**
+2. Railway automatically sets `REDIS_URL` in your service environment — no manual config needed.
+
+---
+
 ## Slack
 
 You need three things: a **bot token** (`xoxb-...`), a **signing secret**, and the **events webhook** pointing at your Railway URL.
@@ -120,6 +131,7 @@ Two options:
 
 **OAuth & Permissions** → **Bot Token Scopes** → Add:
 - `chat:write`
+- `reactions:write`
 - `app_mentions:read`
 - `im:read` + `im:history`
 - `channels:read`
@@ -190,7 +202,7 @@ DM `@Deepline GTM Agent` in Slack:
 Find 3 VP of Sales at B2B SaaS companies, 100–500 employees, US
 ```
 
-The bot replies in-thread and maintains conversation history per thread.
+The bot reacts with 👀 while processing, then replies in-thread and maintains conversation history per thread.
 
 ---
 
@@ -221,5 +233,6 @@ If `slack` shows `"not configured"`, `SLACK_BOT_TOKEN` isn't set. If `skills` sh
 | `SLACK_SIGNING_SECRET` | For Slack | From Basic Information → App Credentials |
 | `SLACK_CLIENT_ID` | For OAuth flow | From Basic Information → App Credentials |
 | `SLACK_CLIENT_SECRET` | For OAuth flow | From Basic Information → App Credentials |
+| `REDIS_URL` | Recommended | Enables persistent Slack conversation history (7-day TTL). Railway sets this automatically when you add a Redis plugin. |
 | `API_KEY` | Optional | Protect `/chat` endpoints with bearer auth |
 | `CORS_ORIGINS` | Optional | Comma-separated allowed origins (default: `*`) |
