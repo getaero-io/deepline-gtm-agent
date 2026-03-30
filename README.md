@@ -17,7 +17,7 @@ The agent handles core GTM workflows, each backed by a waterfall of data provide
 
 | Workflow | What you ask | What happens |
 |---|---|---|
-| **Enrich contacts** | "Find the email for Jane Smith at Acme" | 10-provider waterfall: Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → AI Ark → PDL → Forager |
+| **Enrich contacts** | "Find the email for Jane Smith at Acme" | 9-provider waterfall: Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → PDL → Forager |
 | **Search prospects** | "Find 10 VP of Sales at B2B SaaS, 200–500 employees, US" | Dropleads (free, broad) → Icypeas (recently-hired filter) → Deepline Native (domain-specific) |
 | **Research accounts** | "Research stripe.com" | Crustdata → Exa web; returns description, headcount, funding, tech stack, HQ |
 | **Verify emails** | "Is jsmith@acme.com safe to send?" | LeadMagic → ZeroBounce; returns valid/invalid + MX provider + sub-status |
@@ -55,7 +55,6 @@ Deepline API (code.deepline.com) ← single key, 441+ integrations underneath
     ├── Crustdata       (LinkedIn-native enrichment, headcount signals)
     ├── Icypeas         (email search, recently-hired filtering)
     ├── Prospeo         (person enrichment, 30+ search filters)
-    ├── AI Ark          (email finding, person & company search)
     ├── People Data Labs (deep person & company enrichment)
     ├── Forager         (person & company data, phone recovery)
     ├── Exa             (live web research — news, bios, job postings)
@@ -89,7 +88,6 @@ This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Dee
 | [Apollo](https://apollo.io) | Person & company enrichment, search |
 | [Dropleads](https://dropleads.io) | Person search, email finding — free tier, broad coverage |
 | [Icypeas](https://icypeas.com) | Email search, recently-hired filtering, profile scraping |
-| [AI Ark](https://aiark.ai) | Email finding, person & company search |
 
 **Email Finding & Verification**
 
@@ -226,7 +224,7 @@ Nine tools are registered on the agent. The eight high-level tools handle common
 
 **Inputs:** At least one of `linkedin_url`, `email`, or `first_name + last_name`. Optionally `company_domain` or `company_name`.
 
-**Waterfall (10 providers, stops on first hit):** Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → AI Ark → PeopleDataLabs → Forager
+**Waterfall (9 providers, stops on first hit):** Dropleads → Hunter → LeadMagic → Deepline Native → Crustdata → Icypeas → Prospeo → PeopleDataLabs → Forager
 
 **Returns:** `{email, phone, linkedin_url, title, company, location, provider, providers_tried}`
 

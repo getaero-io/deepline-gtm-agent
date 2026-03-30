@@ -716,23 +716,7 @@ def waterfall_enrich(
         except Exception as e:
             logger.debug("prospeo_person_enrichment failed: %s", e)
 
-    # 8. AI Ark email finder
-    if first_name and last_name:
-        ark_payload: dict = {"first_name": first_name, "last_name": last_name}
-        if company_domain:
-            ark_payload["domain"] = company_domain
-        elif company_name:
-            ark_payload["company_name"] = company_name
-        try:
-            result = deepline_execute("ai_ark_email_finder", ark_payload)
-            found = result.get("email") or (result.get("data", {}) or {}).get("email")
-            providers_tried.append("ai_ark_email_finder")
-            if found:
-                return {"provider": "ai_ark_email_finder", "email": found, **result}
-        except Exception as e:
-            logger.debug("ai_ark_email_finder failed: %s", e)
-
-    # 9. PeopleDataLabs — enrichment by name + company
+    # 8. PeopleDataLabs — enrichment by name + company
     if first_name and last_name:
         pdl_payload: dict = {
             "params": {
@@ -784,7 +768,7 @@ def waterfall_enrich(
         "error": "All waterfall providers exhausted — no email found.",
         "providers_tried": providers_tried,
         "tip": (
-            "Tried all 10 providers. "
+            "Tried all 9 providers. "
             "Coverage gaps are common for personal/SMB domains or very senior executives. "
             "Try phone enrichment via Forager (reveal_phones=True) or engage via LinkedIn instead."
         ),

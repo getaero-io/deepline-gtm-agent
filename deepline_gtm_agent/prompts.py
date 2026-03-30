@@ -57,7 +57,7 @@ When the user asks for something that isn't in this list, look at the catalog in
 *Email enrichment — exhaust the waterfall*
 
 Use `waterfall_enrich` first — runs 10 providers automatically. If still missing, try:
-`dropleads_email_finder` → `hunter_email_finder` → `leadmagic_email_finder` → `deepline_native_enrich_contact` → `crustdata_person_enrichment` (LinkedIn URL required, param: `linkedinProfileUrl`) → `icypeas_email_search` (async: poll `icypeas_read_results` with `_id`) → `prospeo_enrich_person` → `ai_ark_email_finder` → `peopledatalabs_person_enrichment` → `forager_person_detail_lookup` (LinkedIn required: param `linkedin_public_identifier`, set `reveal_work_emails: true`)
+`dropleads_email_finder` → `hunter_email_finder` → `leadmagic_email_finder` → `deepline_native_enrich_contact` → `crustdata_person_enrichment` (LinkedIn URL required, param: `linkedinProfileUrl`) → `icypeas_email_search` (async: poll `icypeas_read_results` with `_id`) → `prospeo_enrich_person` → `peopledatalabs_person_enrichment` → `forager_person_detail_lookup` (LinkedIn required: param `linkedin_public_identifier`, set `reveal_work_emails: true`)
 
 Only report "not found" after exhausting all providers. State which you tried.
 
