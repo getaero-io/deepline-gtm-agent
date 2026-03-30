@@ -50,7 +50,7 @@ def enrich_person(
     """
     Enrich a person's contact data: work email, phone, job title, LinkedIn.
 
-    Waterfall: Hunter (domain + name) → Crustdata (LinkedIn URL) → Deepline Native Prospector (domain).
+    Waterfall: Hunter (domain + name) → Crustdata (LinkedIn URL) → Deepline Native enrich_contact.
     At least one of linkedin_url, email, or (first_name + last_name + company) is required.
 
     Returns a dict with: email, phone, linkedin_url, title, company, location.
@@ -80,47 +80,42 @@ def enrich_person(
         except Exception as e:
             logger.debug("hunter_email_finder failed for enrich_person: %s", e)
 
-    # Crustdata people enrichment — LinkedIn-native, best when URL is known
+    # Crustdata person enrichment — LinkedIn-native, best when URL is known
+    # Correct tool: crustdata_person_enrichment with linkedinProfileUrl param
     if linkedin_url:
         try:
-            result = deepline_execute("crustdata_people_enrich", {"linkedin_url": linkedin_url})
+            result = deepline_execute("crustdata_person_enrichment", {"linkedinProfileUrl": linkedin_url})
             if result:
                 return {"provider": "crustdata", **result}
         except Exception as e:
-            logger.debug("crustdata_people_enrich failed for enrich_person: %s", e)
+            logger.debug("crustdata_person_enrichment failed for enrich_person: %s", e)
 
-    # Deepline Native Prospector — domain-specific, returns verified emails
-    # title_filter is for job titles only — fetch all contacts and match by name client-side
-    if company_domain:
-        target_name = f"{first_name or ''} {last_name or ''}".strip().lower()
+    # Deepline Native enrich_contact — single contact enrichment (not prospector)
+    # prospector requires a title filter and returns batch results; enrich_contact
+    # takes one identity (linkedin + domain, or first + last + domain) and returns
+    # a single verified contact record.
+    if linkedin_url and company_domain:
         try:
-            result = deepline_execute("deepline_native_prospector", {
+            result = deepline_execute("deepline_native_enrich_contact", {
+                "linkedin": linkedin_url,
                 "domain": company_domain,
-                "limit": 25,
             })
-            contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
-            # Find the best name match; fall back to first contact if no name provided
-            matched = None
-            if target_name and contacts:
-                for c in contacts:
-                    full = (c.get("name") or c.get("fullName") or "").lower()
-                    if target_name in full or full in target_name:
-                        matched = c
-                        break
-            if matched is None and contacts and not target_name:
-                matched = contacts[0]
-            if matched:
-                return {
-                    "provider": "deepline_native_prospector",
-                    "email": matched.get("email"),
-                    "linkedin_url": matched.get("linkedin"),
-                    "phone": matched.get("phone"),
-                    "name": matched.get("name") or matched.get("fullName") or target_name or None,
-                    "title": matched.get("title"),
-                    "company": company_name or company_domain,
-                }
+            if result.get("email") or (result.get("data") or {}).get("email"):
+                return {"provider": "deepline_native_enrich_contact", **result}
         except Exception as e:
-            logger.debug("deepline_native_prospector failed for enrich_person: %s", e)
+            logger.debug("deepline_native_enrich_contact (linkedin) failed for enrich_person: %s", e)
+
+    if first_name and last_name and company_domain:
+        try:
+            result = deepline_execute("deepline_native_enrich_contact", {
+                "first_name": first_name,
+                "last_name": last_name,
+                "domain": company_domain,
+            })
+            if result.get("email") or (result.get("data") or {}).get("email"):
+                return {"provider": "deepline_native_enrich_contact", **result}
+        except Exception as e:
+            logger.debug("deepline_native_enrich_contact (name) failed for enrich_person: %s", e)
 
     return {"error": "Could not enrich contact — try providing more identifiers."}
 
@@ -389,11 +384,12 @@ def search_prospects(
         logger.debug("dropleads_search_people failed for search_prospects: %s", e)
 
     # --- Deepline Native Prospector fallback (domain-specific, has email) ---
+    # Requires title_filters as an array of {name, filter} objects — not title_filter string
     if company_domain and job_title:
         try:
             result = deepline_execute("deepline_native_prospector", {
                 "domain": company_domain,
-                "title_filter": job_title,
+                "title_filters": [{"name": "primary", "filter": job_title}],
                 "limit": min(limit, 25),
             })
             contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
@@ -669,6 +665,8 @@ def waterfall_enrich(
             logger.debug("crustdata_person_enrichment failed: %s", e)
 
     # 6. Icypeas email search — name + domain or LinkedIn
+    # icypeas_email_search is async: returns SCHEDULED with an _id.
+    # Poll icypeas_read_results until email is available (up to ~15s).
     if first_name and last_name:
         ic_payload: dict = {"first_name": first_name, "last_name": last_name}
         if company_domain:
@@ -677,8 +675,24 @@ def waterfall_enrich(
             ic_payload["company_name"] = company_name
         try:
             result = deepline_execute("icypeas_email_search", ic_payload)
-            found = result.get("email") or (result.get("data", {}) or {}).get("email")
             providers_tried.append("icypeas_email_search")
+            # Check if result is immediate (some Deepline wrappers resolve async internally)
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            if not found:
+                # Poll for async result
+                import time as _time
+                result_id = result.get("_id") or (result.get("data") or {}).get("_id")
+                if result_id:
+                    for _ in range(5):
+                        _time.sleep(3)
+                        try:
+                            poll = deepline_execute("icypeas_read_results", {"id": result_id})
+                            found = poll.get("email") or (poll.get("data") or {}).get("email")
+                            if found:
+                                result = poll
+                                break
+                        except Exception:
+                            break
             if found:
                 return {"provider": "icypeas_email_search", "email": found, **result}
         except Exception as e:
@@ -739,24 +753,32 @@ def waterfall_enrich(
         except Exception as e:
             logger.debug("peopledatalabs_person_enrichment failed: %s", e)
 
-    # 10. Forager role search — can return email when reveal_contact=True
-    if company_domain and (first_name or last_name):
-        role_title = f"{first_name or ''} {last_name or ''}".strip()
-        try:
-            result = deepline_execute("forager_person_role_search", {
-                "role_title": f'"{role_title}"',
-                "organization_domains": [company_domain],
-                "reveal_phones": False,
-            })
-            people = (result.get("data") or result).get("people", [])
-            for person in people:
-                found = person.get("email") or person.get("work_email")
+    # 10. Forager person detail lookup — requires LinkedIn public identifier
+    # forager_person_role_search is for role/title-based prospecting, not name lookup.
+    # For email discovery, forager_person_detail_lookup with reveal_work_emails is correct.
+    if linkedin_url:
+        import re as _re
+        li_match = _re.search(r"linkedin\.com/in/([\w\-]+)", linkedin_url)
+        if li_match:
+            li_identifier = li_match.group(1)
+            try:
+                result = deepline_execute("forager_person_detail_lookup", {
+                    "linkedin_public_identifier": li_identifier,
+                    "reveal_work_emails": True,
+                    "reveal_personal_emails": False,
+                    "reveal_phone_numbers": False,
+                })
+                data = result.get("data") or result
+                found = (
+                    data.get("work_email")
+                    or data.get("email")
+                    or (data.get("person") or {}).get("work_email")
+                )
+                providers_tried.append("forager_person_detail_lookup")
                 if found:
-                    providers_tried.append("forager_person_role_search")
-                    return {"provider": "forager_person_role_search", "email": found, **person}
-            providers_tried.append("forager_person_role_search")
-        except Exception as e:
-            logger.debug("forager_person_role_search failed: %s", e)
+                    return {"provider": "forager_person_detail_lookup", "email": found, **data}
+            except Exception as e:
+                logger.debug("forager_person_detail_lookup failed: %s", e)
 
     return {
         "error": "All waterfall providers exhausted — no email found.",
@@ -833,27 +855,29 @@ def find_linkedin(
     Waterfall: Deepline Native Prospector (if domain known) → Exa web research.
     Returns: {"linkedin_url": str, "confidence": str}
     """
-    # Deepline Native Prospector — domain-specific, returns LinkedIn URLs
-    # title_filter is for job titles only — fetch all contacts and match by name client-side
+    # Deepline Native enrich_contact — returns linkedin_url for a known name + domain
+    # enrich_contact is the correct single-contact tool; prospector requires a title filter
     if company_domain:
-        target_name = f"{first_name} {last_name}".strip().lower()
         try:
-            result = deepline_execute("deepline_native_prospector", {
+            result = deepline_execute("deepline_native_enrich_contact", {
+                "first_name": first_name,
+                "last_name": last_name,
                 "domain": company_domain,
-                "limit": 25,
             })
-            contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
-            for c in contacts:
-                full = (c.get("name") or c.get("fullName") or "").lower()
-                if target_name in full or full in target_name:
-                    if c.get("linkedin"):
-                        return {
-                            "linkedin_url": c["linkedin"],
-                            "confidence": "high",
-                            "provider": "deepline_native_prospector",
-                        }
+            linkedin = (
+                result.get("linkedin_url")
+                or result.get("linkedin")
+                or (result.get("data") or {}).get("linkedin_url")
+                or (result.get("data") or {}).get("linkedin")
+            )
+            if linkedin:
+                return {
+                    "linkedin_url": linkedin,
+                    "confidence": "high",
+                    "provider": "deepline_native_enrich_contact",
+                }
         except Exception as e:
-            logger.debug("deepline_native_prospector failed for find_linkedin: %s", e)
+            logger.debug("deepline_native_enrich_contact failed for find_linkedin: %s", e)
 
     # Exa web research fallback — finds LinkedIn profiles via live web search
     try:

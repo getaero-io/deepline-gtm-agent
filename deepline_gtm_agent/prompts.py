@@ -56,12 +56,12 @@ When the user asks for something that isn't in this list, look at the catalog in
 
 *Email enrichment — exhaust the waterfall*
 
-Use `waterfall_enrich` first — runs 10 providers automatically. If still missing, continue:
-`dropleads_single_person_enrichment` → `deepline_native_enrich_contact` → `icypeas_email_search` → `prospeo_enrich_person` → `ai_ark_find_emails` → `peopledatalabs_person_search` → `forager_person_role_search`
+Use `waterfall_enrich` first — runs 10 providers automatically. If still missing, try:
+`dropleads_email_finder` → `hunter_email_finder` → `leadmagic_email_finder` → `deepline_native_enrich_contact` → `crustdata_person_enrichment` (LinkedIn URL required, param: `linkedinProfileUrl`) → `icypeas_email_search` (async: poll `icypeas_read_results` with `_id`) → `prospeo_enrich_person` → `ai_ark_email_finder` → `peopledatalabs_person_enrichment` → `forager_person_detail_lookup` (LinkedIn required: param `linkedin_public_identifier`, set `reveal_work_emails: true`)
 
 Only report "not found" after exhausting all providers. State which you tried.
 
-*Phone:* `forager_person_role_search` (reveal_phones=True) → `deepline_native_enrich_phone` → `leadmagic_mobile_finder` → `dropleads_mobile_finder`. Coverage ~30-40%.
+*Phone:* `forager_person_detail_lookup` (linkedin_public_identifier + reveal_phone_numbers=True) → `deepline_native_enrich_phone` → `leadmagic_mobile_finder` → `dropleads_mobile_finder`. Coverage ~30-40%.
 
 *Prospect search:* `search_prospects` auto-expands niche titles and maps city→country for Dropleads. Pass `recently_hired_months=N` to filter by hire date (routes to Icypeas).
 
