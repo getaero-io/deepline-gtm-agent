@@ -90,23 +90,33 @@ def enrich_person(
             logger.debug("crustdata_people_enrich failed for enrich_person: %s", e)
 
     # Deepline Native Prospector — domain-specific, returns verified emails
+    # title_filter is for job titles only — fetch all contacts and match by name client-side
     if company_domain:
-        name_filter = f"{first_name or ''} {last_name or ''}".strip()
+        target_name = f"{first_name or ''} {last_name or ''}".strip().lower()
         try:
             result = deepline_execute("deepline_native_prospector", {
                 "domain": company_domain,
-                "title_filter": name_filter,
-                "limit": 1,
+                "limit": 25,
             })
             contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
-            if contacts:
-                c = contacts[0]
+            # Find the best name match; fall back to first contact if no name provided
+            matched = None
+            if target_name and contacts:
+                for c in contacts:
+                    full = (c.get("name") or c.get("fullName") or "").lower()
+                    if target_name in full or full in target_name:
+                        matched = c
+                        break
+            if matched is None and contacts and not target_name:
+                matched = contacts[0]
+            if matched:
                 return {
                     "provider": "deepline_native_prospector",
-                    "email": c.get("email"),
-                    "linkedin_url": c.get("linkedin"),
-                    "phone": c.get("phone"),
-                    "name": name_filter or None,
+                    "email": matched.get("email"),
+                    "linkedin_url": matched.get("linkedin"),
+                    "phone": matched.get("phone"),
+                    "name": matched.get("name") or matched.get("fullName") or target_name or None,
+                    "title": matched.get("title"),
                     "company": company_name or company_domain,
                 }
         except Exception as e:
@@ -824,21 +834,24 @@ def find_linkedin(
     Returns: {"linkedin_url": str, "confidence": str}
     """
     # Deepline Native Prospector — domain-specific, returns LinkedIn URLs
+    # title_filter is for job titles only — fetch all contacts and match by name client-side
     if company_domain:
-        name_filter = f"{first_name} {last_name}".strip()
+        target_name = f"{first_name} {last_name}".strip().lower()
         try:
             result = deepline_execute("deepline_native_prospector", {
                 "domain": company_domain,
-                "title_filter": name_filter,
-                "limit": 1,
+                "limit": 25,
             })
             contacts = (result.get("result", {}).get("data") or result).get("contacts", [])
-            if contacts and contacts[0].get("linkedin"):
-                return {
-                    "linkedin_url": contacts[0]["linkedin"],
-                    "confidence": "high",
-                    "provider": "deepline_native_prospector",
-                }
+            for c in contacts:
+                full = (c.get("name") or c.get("fullName") or "").lower()
+                if target_name in full or full in target_name:
+                    if c.get("linkedin"):
+                        return {
+                            "linkedin_url": c["linkedin"],
+                            "confidence": "high",
+                            "provider": "deepline_native_prospector",
+                        }
         except Exception as e:
             logger.debug("deepline_native_prospector failed for find_linkedin: %s", e)
 
