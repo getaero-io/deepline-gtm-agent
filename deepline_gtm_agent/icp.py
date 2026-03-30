@@ -10,7 +10,7 @@ DEEPLINE_ICP_CONTEXT = """
 *Deepline ICP & Fit Scoring*
 
 Deepline is a unified GTM data API that replaces tool sprawl (Apollo, Clay, ZoomInfo, Clearbit, etc.)
-with a single API routing across 30+ enrichment providers, plus AI-native workflow automation.
+with a single API routing across 441+ integrations spanning enrichment, CRM, outreach, and research, plus AI-native workflow automation.
 
 *Ideal customer profile:*
 • B2B SaaS, 50–1000 employees, Series A–D
