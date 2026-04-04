@@ -8,8 +8,18 @@ Each function follows the Deep Agents convention:
 """
 
 import logging
+import re as _re_module
 from typing import Optional
 from deepline_gtm_agent.deepline import deepline_execute
+from deepline_gtm_agent.orgchart import (
+    slugify,
+    classify_seniority,
+    SENIORITY_LABELS,
+    extract_team_from_title,
+    extract_teams_from_jobs,
+    assign_team,
+    build_hierarchy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -941,3 +951,322 @@ def search_companies(
     except Exception as e:
         logger.debug("exa_research failed for search_companies: %s", e)
         return {"error": f"Company search failed: {e}", "criteria": criteria}
+
+
+# ---------------------------------------------------------------------------
+# Org chart builder
+# ---------------------------------------------------------------------------
+
+
+def build_org_chart(
+    linkedin_url: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    company_domain: Optional[str] = None,
+    company_name: Optional[str] = None,
+) -> dict:
+    """
+    Build an org chart around a target person at a company.
+
+    Finds employees via Apollo and Dropleads, classifies seniority, infers
+    team membership from job listings, and builds a hierarchy with manager,
+    peers, and direct reports.
+
+    Provide at least one of: linkedin_url, or (first_name + last_name + company).
+    Returns: people dict, hierarchy graph, and summary with manager/peers/reports.
+    """
+    target_name = None
+    target_title = None
+
+    if not any([linkedin_url, (first_name and last_name)]):
+        return {"error": "Provide linkedin_url, or first_name + last_name (+ company)."}
+
+    # -----------------------------------------------------------------
+    # Step 1: Resolve target identity
+    # -----------------------------------------------------------------
+    if linkedin_url:
+        linkedin_url = _normalize_linkedin_url(linkedin_url)
+        try:
+            profile = deepline_execute("leadmagic_profile_search", {
+                "url": linkedin_url,
+            })
+            first_name = first_name or profile.get("first_name", "")
+            last_name = last_name or profile.get("last_name", "")
+            target_title = profile.get("current_position_title", "")
+            company_name = company_name or profile.get("company_name", "")
+            company_domain = company_domain or profile.get("company_website", "")
+        except Exception as e:
+            logger.debug("leadmagic_profile_search failed: %s", e)
+
+    if not company_domain and company_name:
+        try:
+            exa_result = deepline_execute("exa_search", {
+                "query": f"{company_name} official website",
+                "numResults": 1,
+            })
+            results = exa_result.get("results", [])
+            if results:
+                url = results[0].get("url", "")
+                domain_match = _re_module.search(
+                    r"https?://(?:www\.)?([^/]+)", url
+                )
+                if domain_match:
+                    company_domain = domain_match.group(1)
+        except Exception as e:
+            logger.debug("exa_search for domain resolution failed: %s", e)
+
+    if not company_domain and not company_name:
+        return {"error": "Could not determine company. Provide company_domain or company_name."}
+
+    target_name = f"{first_name or ''} {last_name or ''}".strip()
+
+    # -----------------------------------------------------------------
+    # Step 2: Find ALL employees (wide net)
+    # -----------------------------------------------------------------
+    raw_people: list[dict] = []
+
+    # Apollo search - 4 seniority tiers
+    apollo_tiers = [
+        (["owner", "founder", "c_suite", "vp"], 50),
+        (["head", "director"], 50),
+        (["manager"], 50),
+        (["senior", "entry"], 30),
+    ]
+    for seniorities, per_page in apollo_tiers:
+        try:
+            payload = {
+                "person_seniorities": seniorities,
+                "per_page": per_page,
+            }
+            if company_domain:
+                payload["q_organization_domains"] = company_domain
+            elif company_name:
+                payload["q_organization_name"] = company_name
+            result = deepline_execute("apollo_search_people", payload)
+            people_list = result.get("people", [])
+            for p in people_list:
+                raw_people.append({
+                    "name": p.get("name", ""),
+                    "title": p.get("title", ""),
+                    "linkedin_url": p.get("linkedin_url", ""),
+                    "city": p.get("city", ""),
+                    "state": p.get("state", ""),
+                    "country": p.get("country", ""),
+                    "email": p.get("email", ""),
+                    "departments": p.get("departments", []),
+                    "source": "apollo",
+                })
+        except Exception as e:
+            logger.debug("apollo_search_people (seniorities=%s) failed: %s", seniorities, e)
+
+    # Dropleads supplementary source
+    if company_domain:
+        try:
+            dl_result = deepline_execute("dropleads_search_people", {
+                "companyDomains": [company_domain],
+                "limit": 50,
+            })
+            leads = (dl_result.get("data") or dl_result).get("leads", [])
+            for lead in leads:
+                raw_people.append({
+                    "name": lead.get("fullName", ""),
+                    "title": lead.get("title", ""),
+                    "linkedin_url": lead.get("linkedinUrl", ""),
+                    "city": "",
+                    "state": "",
+                    "country": "",
+                    "email": lead.get("email", ""),
+                    "departments": [],
+                    "location": lead.get("location", ""),
+                    "source": "dropleads",
+                })
+        except Exception as e:
+            logger.debug("dropleads_search_people failed: %s", e)
+
+    # Deduplicate by slugified name, merge sources
+    seen: dict[str, dict] = {}
+    for person in raw_people:
+        name = person.get("name", "").strip()
+        if not name:
+            continue
+        slug = slugify(name)
+        if not slug:
+            continue
+        if slug in seen:
+            # Merge: add source, prefer non-empty fields
+            existing = seen[slug]
+            if person["source"] not in existing["sources"]:
+                existing["sources"].append(person["source"])
+            for field in ("title", "linkedin_url", "email", "city", "state", "country"):
+                if not existing.get(field) and person.get(field):
+                    existing[field] = person[field]
+            if person.get("departments"):
+                existing.setdefault("departments", [])
+                for d in person["departments"]:
+                    if d not in existing["departments"]:
+                        existing["departments"].append(d)
+        else:
+            seen[slug] = {
+                "slug": slug,
+                "name": name,
+                "title": person.get("title", ""),
+                "linkedin_url": person.get("linkedin_url", ""),
+                "city": person.get("city", ""),
+                "state": person.get("state", ""),
+                "country": person.get("country", ""),
+                "email": person.get("email", ""),
+                "departments": list(person.get("departments", [])),
+                "sources": [person["source"]],
+            }
+
+    # Classify seniority and extract team from title
+    for slug, person in seen.items():
+        person["seniority"] = classify_seniority(person["title"])
+        person["seniority_label"] = SENIORITY_LABELS.get(person["seniority"], "")
+        person["team"] = extract_team_from_title(person["title"])
+        if not person["team"] and person.get("departments"):
+            person["team"] = person["departments"][0]
+
+    # Ensure target person is in the list
+    target_slug = slugify(target_name) if target_name else ""
+    if target_slug and target_slug not in seen:
+        seen[target_slug] = {
+            "slug": target_slug,
+            "name": target_name,
+            "title": target_title or "",
+            "linkedin_url": linkedin_url or "",
+            "city": "",
+            "state": "",
+            "country": "",
+            "email": "",
+            "departments": [],
+            "sources": ["input"],
+            "seniority": classify_seniority(target_title or ""),
+            "seniority_label": SENIORITY_LABELS.get(classify_seniority(target_title or ""), ""),
+            "team": extract_team_from_title(target_title or ""),
+        }
+
+    # -----------------------------------------------------------------
+    # Step 3: Fetch job listings and assign teams
+    # -----------------------------------------------------------------
+    known_teams: set[str] = set()
+    if company_domain:
+        try:
+            jobs_result = deepline_execute("crustdata_job_listings", {
+                "companyDomains": company_domain,
+                "limit": 100,
+            })
+            job_listings = jobs_result.get("data", [])
+            if isinstance(job_listings, list):
+                known_teams = extract_teams_from_jobs(job_listings)
+        except Exception as e:
+            logger.debug("crustdata_job_listings failed: %s", e)
+
+    # Assign teams to people who don't have one
+    for slug, person in seen.items():
+        if not person.get("team"):
+            dept = person["departments"][0] if person.get("departments") else ""
+            person["team"] = assign_team(person["title"], known_teams, department=dept)
+
+    # -----------------------------------------------------------------
+    # Step 4: Build hierarchy
+    # -----------------------------------------------------------------
+    people_for_hierarchy = list(seen.values())
+
+    if not target_slug:
+        return {"error": "Could not determine target person slug."}
+
+    hierarchy = build_hierarchy(target_slug, people_for_hierarchy)
+
+    # Build people dict (only included people from the hierarchy)
+    included_slugs: set[str] = set()
+    included_slugs.add(hierarchy.get("root", ""))
+    included_slugs.add(hierarchy.get("target", ""))
+    for parent, children in hierarchy.get("edges", {}).items():
+        included_slugs.add(parent)
+        for child in children:
+            included_slugs.add(child)
+    included_slugs.discard("")
+
+    def _confidence(sources: list[str]) -> str:
+        n = len(sources)
+        if n >= 3:
+            return "high"
+        if n >= 2:
+            return "medium"
+        return "low"
+
+    people_dict: dict[str, dict] = {}
+    for slug in included_slugs:
+        person = seen.get(slug)
+        if not person:
+            continue
+        li = person.get("linkedin_url", "")
+        if li:
+            li = _normalize_linkedin_url(li)
+        location_parts = [
+            p for p in [person.get("city"), person.get("state"), person.get("country")] if p
+        ]
+        people_dict[slug] = {
+            "name": person["name"],
+            "title": person.get("title", ""),
+            "seniority": person.get("seniority", "ic"),
+            "seniority_label": person.get("seniority_label", ""),
+            "team": person.get("team", ""),
+            "location": ", ".join(location_parts),
+            "linkedin": li,
+            "email": person.get("email", ""),
+            "sources": person.get("sources", []),
+            "confidence": _confidence(person.get("sources", [])),
+        }
+
+    # -----------------------------------------------------------------
+    # Step 5: Build summary
+    # -----------------------------------------------------------------
+    edges = hierarchy.get("edges", {})
+    target_person = seen.get(target_slug, {})
+
+    # Find manager: who has target as a child?
+    manager_slug = None
+    for parent, children in edges.items():
+        if target_slug in children:
+            manager_slug = parent
+            break
+
+    manager_name = None
+    manager_title = None
+    if manager_slug and manager_slug in seen:
+        manager_name = seen[manager_slug]["name"]
+        manager_title = seen[manager_slug].get("title", "")
+
+    # Find peers: siblings under the same manager
+    peers: list[str] = []
+    if manager_slug and manager_slug in edges:
+        for child in edges[manager_slug]:
+            if child != target_slug and child in seen:
+                peers.append(seen[child]["name"])
+
+    # Find direct reports: children of target
+    direct_reports: list[str] = []
+    if target_slug in edges:
+        for child in edges[target_slug]:
+            if child in seen:
+                direct_reports.append(seen[child]["name"])
+
+    summary = {
+        "target": target_person.get("name", target_name),
+        "target_title": target_person.get("title", target_title or ""),
+        "manager": manager_name,
+        "manager_title": manager_title,
+        "peers": peers[:10],
+        "direct_reports": direct_reports[:10],
+        "total_people": len(people_dict),
+        "company": company_name or "",
+        "domain": company_domain or "",
+    }
+
+    return {
+        "people": people_dict,
+        "hierarchy": hierarchy,
+        "summary": summary,
+    }
