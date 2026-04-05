@@ -22,6 +22,14 @@ from deepline_gtm_agent.tools import (
     find_linkedin,
     search_companies,
     build_org_chart,
+    waterfall_prospect,
+    waterfall_enrich_contact,
+    waterfall_enrich_phone,
+    waterfall_enrich_company,
+    waterfall_search_contacts,
+    waterfall_search_companies,
+    waterfall_job_change,
+    waterfall_verify_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +46,14 @@ GTM_HIGH_LEVEL_TOOLS: list[Callable] = [
     find_linkedin,
     search_companies,
     build_org_chart,
+    waterfall_prospect,
+    waterfall_enrich_contact,
+    waterfall_enrich_phone,
+    waterfall_enrich_company,
+    waterfall_search_contacts,
+    waterfall_search_companies,
+    waterfall_job_change,
+    waterfall_verify_email,
 ]
 
 

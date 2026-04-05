@@ -114,6 +114,30 @@ build_org_chart(first_name="Jane", last_name="Doe", company_domain="acme.com", c
 """
 
 
+WATERFALL_SKILL_DOC = """## Skill doc: Waterfall.io integration
+
+**When to use Waterfall vs Deepline providers:**
+- Waterfall aggregates 30+ data vendors behind one API - higher coverage than any single Deepline provider
+- Use `waterfall_prospect` when you need to find contacts at a company and want maximum coverage
+- Use `waterfall_enrich_contact` after the Deepline waterfall if Deepline providers missed
+- Use `waterfall_job_change` for detecting job changes (unique capability - not in Deepline)
+- Use `waterfall_verify_email` as a backup to LeadMagic/ZeroBounce for email verification
+- Waterfall is async (POST to launch, polls until done) - expect 5-15s per request
+- Requires WATERFALL_API_KEY env var
+
+**Tool selection guide:**
+| Need | Deepline first | Waterfall fallback |
+|------|---------------|-------------------|
+| Find contacts at company | company_to_contact_by_role_waterfall | waterfall_prospect |
+| Enrich person | name_and_company_to_email_waterfall | waterfall_enrich_contact |
+| Phone numbers | contact_to_phone_waterfall | waterfall_enrich_phone |
+| Company data | crustdata_company_enrichment | waterfall_enrich_company |
+| Search contacts | dropleads/apollo/icypeas | waterfall_search_contacts |
+| Job change detection | N/A | waterfall_job_change (unique) |
+| Email verification | leadmagic + zerobounce | waterfall_verify_email |
+"""
+
+
 async def _fetch(url: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -147,6 +171,7 @@ async def load_skill_docs() -> str:
     # Append local skill docs (not from CDN)
     sections.append(f"## Skill doc: /last30days workflow\n\n{LOCAL_SKILL_DOCS}")
     sections.append(ORGCHART_SKILL_DOC)
+    sections.append(WATERFALL_SKILL_DOC)
 
     if sections:
         return "\n\n---\n\n".join(sections)

@@ -1270,3 +1270,284 @@ def build_org_chart(
         "hierarchy": hierarchy,
         "summary": summary,
     }
+
+
+# ---------------------------------------------------------------------------
+# Waterfall.io integration
+# ---------------------------------------------------------------------------
+
+
+def waterfall_prospect(
+    domain: str,
+    title_filter: str = "",
+    limit: int = 25,
+    include_phones: bool = False,
+    location_countries: Optional[list[str]] = None,
+) -> dict:
+    """
+    Find contacts at a company using Waterfall.io's Prospector.
+
+    Waterfall aggregates 30+ data vendors for high coverage.
+    Async: launches a job and polls until results are ready.
+
+    Args:
+        domain: Company domain (e.g. "stripe.com")
+        title_filter: Boolean title filter (e.g. "VP Sales OR Director Marketing")
+        limit: Max results (1-500, default 25)
+        include_phones: Also enrich phone numbers
+        location_countries: Filter by country codes
+
+    Returns: {company, persons: [{first_name, last_name, title, email, linkedin_url, ...}]}
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_async_job
+
+    payload = {"domain": domain, "limit": limit, "include_phones": include_phones, "verified_only": True}
+    if title_filter:
+        payload["title_filter"] = title_filter
+    if location_countries:
+        payload["location_countries"] = location_countries
+
+    result = waterfall_async_job("/v1/prospector", payload)
+    output = result.get("output", {})
+    return {
+        "provider": "waterfall",
+        "status": result.get("status"),
+        "company": output.get("company", {}),
+        "persons": output.get("persons", []),
+        "count": len(output.get("persons", [])),
+    }
+
+
+def waterfall_enrich_contact(
+    linkedin: Optional[str] = None,
+    email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    full_name: Optional[str] = None,
+    domain: Optional[str] = None,
+    include_phones: bool = False,
+) -> dict:
+    """
+    Enrich a contact using Waterfall.io's 30+ data vendors.
+
+    Provide one of: linkedin URL, email, or name + domain.
+    Returns enriched person with email, phone, title, company, experience history.
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_async_job
+
+    payload = {"include_phones": include_phones}
+    if linkedin:
+        payload["linkedin"] = linkedin
+    elif email:
+        payload["email"] = email
+    elif full_name and domain:
+        payload["full_name"] = full_name
+        payload["domain"] = domain
+    elif first_name and last_name and domain:
+        payload["first_name"] = first_name
+        payload["last_name"] = last_name
+        payload["domain"] = domain
+    else:
+        return {"error": "Provide linkedin, email, or name + domain."}
+
+    result = waterfall_async_job("/v1/enrichment/contact", payload)
+    person = result.get("output", {}).get("person", {})
+    return {"provider": "waterfall", "status": result.get("status"), **person}
+
+
+def waterfall_enrich_phone(
+    linkedin: Optional[str] = None,
+    email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    domain: Optional[str] = None,
+) -> dict:
+    """
+    Get phone numbers for a contact using Waterfall.io.
+
+    Returns mobile and direct dial numbers. Provide linkedin, email, or name + domain.
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_async_job
+
+    payload = {}
+    if linkedin:
+        payload["linkedin"] = linkedin
+    elif email:
+        payload["email"] = email
+    elif first_name and last_name and domain:
+        payload["first_name"] = first_name
+        payload["last_name"] = last_name
+        payload["domain"] = domain
+    else:
+        return {"error": "Provide linkedin, email, or name + domain."}
+
+    result = waterfall_async_job("/v1/enrichment/phone", payload)
+    person = result.get("output", {}).get("person", {})
+    return {"provider": "waterfall_phone", "status": result.get("status"), "mobile_phone": person.get("mobile_phone"), "phone_numbers": person.get("phone_numbers"), **person}
+
+
+def waterfall_enrich_company(
+    domain: Optional[str] = None,
+    linkedin: Optional[str] = None,
+    name: Optional[str] = None,
+) -> dict:
+    """
+    Enrich company data using Waterfall.io.
+
+    Returns company profile with domain, industry, size, funding, LinkedIn data.
+    Provide one of: domain, LinkedIn URL, or company name.
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_async_job
+
+    payload = {}
+    if domain:
+        payload["domain"] = domain
+    elif linkedin:
+        payload["linkedin"] = linkedin
+    elif name:
+        payload["name"] = name
+    else:
+        return {"error": "Provide domain, linkedin, or name."}
+
+    result = waterfall_async_job("/v1/enrichment/company", payload)
+    company = result.get("output", {}).get("company", {})
+    return {"provider": "waterfall_company", "status": result.get("status"), **company}
+
+
+def waterfall_search_contacts(
+    domain: Optional[str] = None,
+    company_name: Optional[str] = None,
+    title_filters: Optional[list[str]] = None,
+    seniorities: Optional[list[str]] = None,
+    departments: Optional[list[str]] = None,
+    location_countries: Optional[list[str]] = None,
+    page_size: int = 25,
+    page_number: int = 1,
+) -> dict:
+    """
+    Search for contacts using Waterfall.io's database.
+
+    Synchronous - returns results inline. Supports filtering by title, seniority,
+    department, location, and company.
+
+    Returns: {persons: [{first_name, last_name, title, email, linkedin_url, ...}]}
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_request
+
+    payload = {"page_size": page_size, "page_number": page_number}
+    if domain:
+        payload["domain"] = domain
+    if company_name:
+        payload["company_name"] = company_name
+    if title_filters:
+        payload["title_filters"] = title_filters
+    if seniorities:
+        payload["seniorities"] = seniorities
+    if departments:
+        payload["departments"] = departments
+    if location_countries:
+        payload["location_countries"] = location_countries
+
+    result = waterfall_request("POST", "/v1/search/contact", payload=payload)
+    output = result.get("output", {})
+    return {
+        "provider": "waterfall_search",
+        "status": result.get("status"),
+        "persons": output.get("persons", []),
+        "count": len(output.get("persons", [])),
+    }
+
+
+def waterfall_search_companies(
+    industries: Optional[list[str]] = None,
+    location_countries: Optional[list[str]] = None,
+    sizes: Optional[list[str]] = None,
+    page_size: int = 25,
+    page_number: int = 1,
+) -> dict:
+    """
+    Search for companies using Waterfall.io.
+
+    Filter by industry, location, and employee size. Returns enriched company profiles.
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_request
+
+    payload = {"page_size": page_size, "page_number": page_number}
+    if industries:
+        payload["industries"] = industries
+    if location_countries:
+        payload["location_countries"] = location_countries
+    if sizes:
+        payload["sizes"] = sizes
+
+    if not any([industries, location_countries, sizes]):
+        return {"error": "Provide at least one of: industries, location_countries, sizes."}
+
+    result = waterfall_request("POST", "/v1/search/company", payload=payload)
+    output = result.get("output", {})
+    return {
+        "provider": "waterfall_search",
+        "status": result.get("status"),
+        "companies": output.get("companies", []),
+        "count": len(output.get("companies", [])),
+    }
+
+
+def waterfall_job_change(
+    company_domain: Optional[str] = None,
+    contact_linkedin: Optional[str] = None,
+    professional_email: Optional[str] = None,
+    contact_full_name: Optional[str] = None,
+) -> dict:
+    """
+    Check if a contact has changed jobs using Waterfall.io.
+
+    Detects: left, moved (new company), promoted, no_change, or unknown.
+    Useful for keeping CRM data fresh and detecting buying signals.
+
+    Returns: {job_change_status, person (if found at new company)}
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_async_job
+
+    payload = {}
+    if company_domain:
+        payload["company_domain"] = company_domain
+    if contact_linkedin:
+        payload["contact_linkedin"] = contact_linkedin
+    if professional_email:
+        payload["professional_email"] = professional_email
+    if contact_full_name:
+        payload["contact_full_name"] = contact_full_name
+
+    if not payload:
+        return {"error": "Provide company_domain + contact identifier."}
+
+    result = waterfall_async_job("/v1/job-change", payload)
+    output = result.get("output", {})
+    return {
+        "provider": "waterfall_job_change",
+        "status": result.get("status"),
+        "job_change_status": output.get("job_change_status"),
+        "person": output.get("person", {}),
+    }
+
+
+def waterfall_verify_email(email: str) -> dict:
+    """
+    Verify an email address using Waterfall.io.
+
+    Returns: {email, email_status: "valid"|"invalid"|"risky"|"unknown", smtp_provider, mx_records}
+    """
+    from deepline_gtm_agent.waterfall_client import waterfall_request
+
+    result = waterfall_request("POST", "/v1/verify-email", payload={"email": email})
+    email_data = result.get("output", {}).get("email", {})
+    return {
+        "provider": "waterfall_verify",
+        "email": email,
+        "email_status": email_data.get("email_status"),
+        "valid": email_data.get("email_status") == "valid",
+        "safe_to_send": email_data.get("email_status") in ("valid",),
+        "smtp_provider": email_data.get("smtp_provider"),
+        "mx_records": email_data.get("mx_records", []),
+    }
