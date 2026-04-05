@@ -9,7 +9,7 @@ Each function follows the Deep Agents convention:
 
 import logging
 import re as _re_module
-from typing import Optional
+from typing import Any, Optional
 from deepline_gtm_agent.deepline import deepline_execute
 from deepline_gtm_agent.orgchart import (
     slugify,
@@ -968,9 +968,9 @@ def build_org_chart(
     """
     Build an org chart around a target person at a company.
 
-    Finds employees via Apollo and Dropleads, classifies seniority, infers
-    team membership from job listings, and builds a hierarchy with manager,
-    peers, and direct reports.
+    Finds employees via Apollo, Dropleads, and Deepline Native (free) to
+    maximize coverage. Classifies seniority, infers team membership from
+    job listings, and builds a hierarchy with manager, peers, and direct reports.
 
     Provide at least one of: linkedin_url, or (first_name + last_name + company).
     Returns: people dict, hierarchy graph, and summary with manager/peers/reports.
@@ -1082,6 +1082,41 @@ def build_org_chart(
                 })
         except Exception as e:
             logger.debug("dropleads_search_people failed: %s", e)
+
+    # Deepline Native search (free) - additional coverage on top of Apollo + Dropleads
+    dn_title_tiers = [
+        "CEO OR CTO OR CFO OR COO OR CMO OR CRO OR Founder OR Co-Founder",
+        "VP OR Vice President OR SVP",
+        "Head OR Director OR Senior Director",
+        "Manager OR Senior Manager",
+    ]
+    for title_filter in dn_title_tiers:
+        try:
+            dn_payload: dict[str, Any] = {"title_filters": [{"name": "tier", "filter": title_filter}]}
+            if company_domain:
+                dn_payload["domain"] = company_domain
+            elif company_name:
+                dn_payload["company_name"] = company_name
+            else:
+                continue
+            dn_result = deepline_execute("deepline_native_search_contact", dn_payload)
+            dn_data = dn_result.get("data", dn_result) if isinstance(dn_result, dict) else {}
+            dn_persons = dn_data.get("persons", dn_data.get("contacts", dn_data.get("results", [])))
+            if isinstance(dn_persons, list):
+                for p in dn_persons:
+                    raw_people.append({
+                        "name": p.get("full_name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+                        "title": p.get("title", ""),
+                        "linkedin_url": p.get("linkedin_url") or p.get("linkedin", ""),
+                        "city": p.get("city", ""),
+                        "state": p.get("state", ""),
+                        "country": p.get("country", ""),
+                        "email": p.get("professional_email") or p.get("email", ""),
+                        "departments": [p["department"]] if p.get("department") else [],
+                        "source": "deepline_native",
+                    })
+        except Exception as e:
+            logger.debug("deepline_native_search_contact (filter=%s) failed: %s", title_filter, e)
 
     # Deduplicate by slugified name, merge sources
     seen: dict[str, dict] = {}

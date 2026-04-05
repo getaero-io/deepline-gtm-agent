@@ -98,7 +98,7 @@ ORGCHART_SKILL_DOC = """## Skill doc: /orgchart - org chart and account mapping
 
 **What to do**:
 1. Call `build_org_chart` with the target's linkedin_url or first_name + last_name + company_domain.
-2. The tool discovers ALL employees via Apollo (4 seniority tiers) + Dropleads, fetches job listings from Crustdata for team structure, and infers hierarchy using multi-feature scoring: seniority gap + team match + geo proximity + experience delta.
+2. The tool discovers ALL employees via three sources for maximum coverage: Apollo (4 seniority tiers), Dropleads, and Deepline Native (free). Fetches job listings from Crustdata for team structure, and infers hierarchy using multi-feature scoring: seniority gap + team match + geo proximity + experience delta.
 3. Return the structured result including the summary (manager, peers, reports).
 4. Sumble is NOT used as a primary source - only as a fallback validation check.
 
