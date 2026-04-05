@@ -92,6 +92,28 @@ search_prospects(
 """
 
 
+ORGCHART_SKILL_DOC = """## Skill doc: /orgchart - org chart and account mapping
+
+**Trigger**: User asks to build an org chart, map an account, identify decision makers, find someone's manager/peers/reports, or map organizational hierarchy around a person.
+
+**What to do**:
+1. Call `build_org_chart` with the target's linkedin_url or first_name + last_name + company_domain.
+2. The tool discovers ALL employees via Apollo (4 seniority tiers) + Dropleads, fetches job listings from Crustdata for team structure, and infers hierarchy using multi-feature scoring: seniority gap + team match + geo proximity + experience delta.
+3. Return the structured result including the summary (manager, peers, reports).
+4. Sumble is NOT used as a primary source - only as a fallback validation check.
+
+**Example calls**:
+```
+build_org_chart(linkedin_url="https://linkedin.com/in/manpreet-singh", company_domain="stripe.com", company_name="Stripe")
+build_org_chart(first_name="Jane", last_name="Doe", company_domain="acme.com", company_name="Acme Corp")
+```
+
+**Manager prediction model**: seniority gap (+10 for 1 level above) + team match (+8 same team) + geo (+2 same city) + experience delta (+2 for 3+ yrs, +3 for 8+ yrs). Min threshold 5.
+
+**Returns**: `{people, hierarchy, summary}` where summary has manager, peers, direct_reports, total_people.
+"""
+
+
 async def _fetch(url: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -124,6 +146,7 @@ async def load_skill_docs() -> str:
 
     # Append local skill docs (not from CDN)
     sections.append(f"## Skill doc: /last30days workflow\n\n{LOCAL_SKILL_DOCS}")
+    sections.append(ORGCHART_SKILL_DOC)
 
     if sections:
         return "\n\n---\n\n".join(sections)
