@@ -1063,10 +1063,10 @@ def build_org_chart(
     if company_domain:
         try:
             dl_result = deepline_execute("dropleads_search_people", {
-                "companyDomains": [company_domain],
-                "limit": 50,
+                "filters": {"companyDomains": [company_domain]},
+                "pagination": {"page": 1, "limit": 100},
             })
-            leads = (dl_result.get("data") or dl_result).get("leads", [])
+            leads = (dl_result.get("data") or dl_result).get("leads", dl_result.get("leads", []))
             for lead in leads:
                 raw_people.append({
                     "name": lead.get("fullName", ""),
@@ -1100,8 +1100,9 @@ def build_org_chart(
             else:
                 continue
             dn_result = deepline_execute("deepline_native_search_contact", dn_payload)
-            dn_data = dn_result.get("data", dn_result) if isinstance(dn_result, dict) else {}
-            dn_persons = dn_data.get("persons", dn_data.get("contacts", dn_data.get("results", [])))
+            # deepline_execute unwraps result.data -> {status, output: {persons: [...]}}
+            dn_output = dn_result.get("output", dn_result) if isinstance(dn_result, dict) else {}
+            dn_persons = dn_output.get("persons", dn_output.get("contacts", dn_output.get("results", [])))
             if isinstance(dn_persons, list):
                 for p in dn_persons:
                     raw_people.append({
@@ -1191,9 +1192,18 @@ def build_org_chart(
                 "companyDomains": company_domain,
                 "limit": 100,
             })
-            job_listings = jobs_result.get("data", [])
+            # Crustdata returns {listings: [{title, category, ...}]} or a flat list
+            job_listings = jobs_result.get("listings", jobs_result.get("data", []))
             if isinstance(job_listings, list):
-                known_teams = extract_teams_from_jobs(job_listings)
+                # Normalize: Crustdata uses "category" not "department"
+                normalized = []
+                for jl in job_listings:
+                    normalized.append({
+                        "title": jl.get("title", ""),
+                        "department": jl.get("category") or jl.get("department", ""),
+                        "team": jl.get("team", ""),
+                    })
+                known_teams = extract_teams_from_jobs(normalized)
         except Exception as e:
             logger.debug("crustdata_job_listings failed: %s", e)
 

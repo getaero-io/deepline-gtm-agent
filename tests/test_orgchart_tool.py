@@ -113,30 +113,51 @@ MOCK_APOLLO_TIER3 = {
 MOCK_APOLLO_TIER4 = {"people": []}
 
 MOCK_DROPLEADS = {
-    "data": {
-        "leads": [
+    "success": True,
+    "pagination": {"page": 1, "limit": 100, "total": 2, "totalPages": 1},
+    "leads": [
+        {
+            "fullName": "Charles Huang",
+            "title": "VP Engineering",
+            "linkedinUrl": "https://linkedin.com/in/charles",
+            "location": "San Francisco, CA",
+            "email": "charles@example.com",
+        },
+        {
+            "fullName": "Jake Torres",
+            "title": "Senior Software Engineer",
+            "linkedinUrl": "https://linkedin.com/in/jake-torres",
+            "location": "Austin, TX",
+            "email": "",
+        },
+    ],
+}
+
+MOCK_DEEPLINE_NATIVE = {
+    "status": "SUCCEEDED",
+    "output": {
+        "persons": [
             {
-                "fullName": "Charles Huang",
-                "title": "VP Engineering",
-                "linkedinUrl": "https://linkedin.com/in/charles",
-                "location": "San Francisco, CA",
-                "email": "charles@example.com",
-            },
-            {
-                "fullName": "Jake Torres",
-                "title": "Senior Software Engineer",
-                "linkedinUrl": "https://linkedin.com/in/jake-torres",
-                "location": "Austin, TX",
-                "email": "",
+                "full_name": "Lisa Chen",
+                "first_name": "Lisa",
+                "last_name": "Chen",
+                "title": "Director of Marketing",
+                "linkedin_url": "https://linkedin.com/in/lisa-chen",
+                "professional_email": "lisa@acme.com",
+                "seniority": "Director",
+                "department": "Marketing",
+                "country": "United States",
             },
         ]
     }
 }
 
+MOCK_DEEPLINE_NATIVE_EMPTY = {"status": "SUCCEEDED", "output": {"persons": []}}
+
 MOCK_JOB_LISTINGS = {
-    "data": [
-        {"title": "Senior Engineer, Platform", "team": "Platform", "department": "Engineering"},
-        {"title": "Product Manager, Identity", "team": "Identity", "department": "Product"},
+    "listings": [
+        {"title": "Senior Engineer, Platform", "category": "Engineering"},
+        {"title": "Product Manager, Identity", "category": "Product"},
     ]
 }
 
@@ -158,6 +179,11 @@ def _mock_execute_basic(tool_id, payload):
         return MOCK_APOLLO_TIER4
     if tool_id == "dropleads_search_people":
         return MOCK_DROPLEADS
+    if tool_id == "deepline_native_search_contact":
+        title_filters = payload.get("title_filters", [])
+        if title_filters and "Director" in title_filters[0].get("filter", ""):
+            return MOCK_DEEPLINE_NATIVE
+        return MOCK_DEEPLINE_NATIVE_EMPTY
     if tool_id == "crustdata_job_listings":
         return MOCK_JOB_LISTINGS
     return {}
