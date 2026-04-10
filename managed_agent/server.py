@@ -88,12 +88,14 @@ class ChatResponse(BaseModel):
 
 @app.get("/health")
 async def health():
-    from session import CONFIG_PATH
-    config_ok = CONFIG_PATH.exists()
+    config_ok = bool(os.environ.get("MANAGED_AGENT_ID") and os.environ.get("MANAGED_ENVIRONMENT_ID"))
+    if not config_ok:
+        from session import CONFIG_PATH
+        config_ok = CONFIG_PATH.exists()
     return {
         "status": "ok" if config_ok else "needs setup",
         "agent": "deepline-gtm-managed-agent",
-        "config": "loaded" if config_ok else "run setup.py first",
+        "config": "loaded" if config_ok else "set MANAGED_AGENT_ID + MANAGED_ENVIRONMENT_ID or run setup.py",
         "slack": "configured" if os.environ.get("SLACK_BOT_TOKEN") else "not configured",
     }
 
