@@ -37,8 +37,16 @@ _DOC_SUFFIXES = {".md", ".json", ".py", ".csv", ".txt", ".mjs"}
 
 
 def _load_config() -> dict:
+    """Load agent config from env vars (preferred) or .agent_config.json."""
+    agent_id = os.environ.get("MANAGED_AGENT_ID")
+    env_id = os.environ.get("MANAGED_ENVIRONMENT_ID")
+    if agent_id and env_id:
+        return {"agent_id": agent_id, "environment_id": env_id}
     if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"No {CONFIG_PATH} - run setup.py first.")
+        raise FileNotFoundError(
+            f"No {CONFIG_PATH} and MANAGED_AGENT_ID/MANAGED_ENVIRONMENT_ID not set. "
+            "Run setup.py first or set env vars."
+        )
     return json.loads(CONFIG_PATH.read_text())
 
 

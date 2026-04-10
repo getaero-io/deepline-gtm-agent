@@ -2,14 +2,19 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install the deepline CLI from production
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+# Install deepline CLI from production
+RUN curl -fsSL https://code.deepline.com/api/v2/cli/python -o /usr/local/bin/deepline && \
+    chmod +x /usr/local/bin/deepline
+
+COPY managed_agent/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY setup.py session.py server.py cli.py chat.html ./
+COPY managed_agent/setup.py managed_agent/session.py managed_agent/server.py \
+     managed_agent/cli.py managed_agent/chat.html ./
 
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+# Entrypoint writes deepline auth from env vars then starts the server.
+CMD ["sh", "-c", "mkdir -p ~/.local/deepline/code-deepline-com && printf 'DEEPLINE_API_KEY=%s\\nDEEPLINE_CLAIM_TOKEN=%s\\n' \"$DEEPLINE_API_KEY\" \"${DEEPLINE_CLAIM_TOKEN:-}\" > ~/.local/deepline/code-deepline-com/.env && python server.py"]
