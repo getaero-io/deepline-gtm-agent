@@ -1,13 +1,44 @@
 # deepline-gtm-agent
 
-Open-source GTM agent built on [Deepline](https://deepline.com) + [Deep Agents](https://github.com/langchain-ai/deepagents) (LangGraph).
+Open-source GTM agent powered by [Deepline](https://deepline.com) (441+ data integrations) with two deployment options:
 
-This is a reference implementation — a working starter kit you can deploy as-is or fork and extend. Deepline handles the data layer (441+ integrations across enrichment, CRM, and outreach). Deep Agents handles the orchestration (LangGraph-powered agent loop). You write the business logic.
+| | **Managed Agent** (recommended) | **LangGraph** |
+|---|---|---|
+| Agent loop | [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview) | [Deep Agents](https://github.com/langchain-ai/deepagents) (LangGraph) |
+| Tool execution | Anthropic sandbox (`deepline` CLI) | Your server (Python) |
+| Scaling | Anthropic manages | You manage |
+| Model | Claude Opus 4.6 | Claude / GPT-4o / Gemini |
+| Setup | `python setup.py` + deploy | `pip install` + deploy |
+| Code | [`managed_agent/`](managed_agent/) | Root (`server.py`, `deepline_gtm_agent/`) |
 
-Inspired by ["How we built LangChain's GTM Agent"](https://blog.langchain.com/how-we-built-langchains-gtm-agent/) — this repo is the Deepline-powered version of that architecture, deployable in minutes.
+**Managed Agent** is the default - Anthropic runs the agent loop and sandbox, your server is a thin broker. See [`managed_agent/README.md`](managed_agent/README.md) for full docs.
 
-**API portal:** [code.deepline.com](https://code.deepline.com) — get your `DEEPLINE_API_KEY` here
-**GitHub:** [github.com/jptoor/deepline-gtm-agent](https://github.com/jptoor/deepline-gtm-agent)
+**LangGraph** is the self-hosted alternative - you run the agent loop and tool execution on your own infrastructure. Docs below.
+
+**API portal:** [code.deepline.com](https://code.deepline.com) - get your `DEEPLINE_API_KEY` here
+
+---
+
+## Quickstart (Managed Agent)
+
+```bash
+pip install anthropic fastapi uvicorn httpx
+
+export ANTHROPIC_API_KEY=sk-ant-...
+export DEEPLINE_API_KEY=dlp_...
+
+cd managed_agent
+python setup.py          # one-time: creates agent + environment on Anthropic
+python server.py         # starts server on :8000 (REST + Slack + Web UI)
+```
+
+Access it:
+- **Web chat:** http://localhost:8000
+- **REST:** `curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message": "find emails for 5 VP Sales at fintech companies"}'`
+- **Slack:** set `SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`, DM or @mention the bot
+- **CLI:** `python cli.py "research stripe.com"`
+
+See [`managed_agent/README.md`](managed_agent/README.md) for deploy instructions (Railway, Docker).
 
 ---
 
@@ -32,125 +63,53 @@ Every response includes a **Sources** section: which providers ran and a recomme
 
 ## How it works
 
+### Managed Agent (recommended)
+
 ```
-Your query
-    │
-    ▼
-Deep Agents (LangGraph)          ← orchestration, tool-calling, conversation memory
-    │  model: claude-opus-4-6 / gpt-4o / gemini-2.0-flash
-    │
-    │  8 high-level tools: waterfall_enrich, enrich_person, search_prospects,
-    │    research_company, web_research, verify_email, find_linkedin, search_companies
-    │
-    │  + deepline_call: passthrough to all 441+ Deepline integrations
-    │    (HubSpot, Salesforce, Attio, Lemlist, Instantly, Smartlead, HeyReach,
-    │     Apollo, Crustdata, Firecrawl, Apify, Exa, BuiltWith, Adyntel, …)
-    │
-    ▼
-Deepline API (code.deepline.com) ← single key, 441+ integrations underneath
-    │
-    ├── Dropleads       (person search — free, broad coverage)
-    ├── Hunter          (domain-level email pattern discovery)
-    ├── LeadMagic       (email + mobile finding, validation)
-    ├── Crustdata       (LinkedIn-native enrichment, headcount signals)
-    ├── Icypeas         (email search, recently-hired filtering)
-    ├── Prospeo         (person enrichment, 30+ search filters)
-    ├── People Data Labs (deep person & company enrichment)
-    ├── Forager         (person & company data, phone recovery)
-    ├── Exa             (live web research — news, bios, job postings)
-    └── ... 430+ more (CRM, outreach, scraping, ad intelligence)
+Slack / REST / Web UI
+      |
+      v
+FastAPI server (thin broker)     <-- creates sessions, streams results
+      |
+      v
+Anthropic Managed Agents         <-- agent loop + sandboxed container
+      |  model: Claude Opus 4.6
+      |  tools: bash, read, write, edit, glob, grep, web_fetch, web_search
+      |  + deepline CLI (authenticated, full access)
+      |
+      v
+Deepline API (code.deepline.com) <-- 441+ integrations
 ```
 
-You don't manage individual provider keys or handle fallback logic — Deepline does that. One API key, one bill, one place to add providers.
+The agent runs the `deepline` CLI inside Anthropic's sandbox. It reads skill docs, picks providers, runs waterfalls, handles retries - all autonomously. Your server just brokers the connection.
 
-### The LangGraph loop
+### LangGraph (self-hosted alternative)
 
-The agent is a compiled LangGraph `StateGraph` returned by `create_gtm_agent()`. Each invocation runs:
+```
+Slack / REST / Web UI
+      |
+      v
+FastAPI + LangGraph              <-- agent loop + tool execution on YOUR server
+      |  model: claude-opus-4-6 / gpt-4o / gemini-2.0-flash
+      |  8 high-level tools + deepline_call passthrough
+      |
+      v
+Deepline API (code.deepline.com) <-- 441+ integrations
+```
 
-1. Model receives user message + full conversation history + system prompt
-2. Model decides which tool(s) to call and with what parameters
-3. Tools execute — each high-level tool runs its own provider waterfall internally; `deepline_call` routes directly to any of the 441 integrations
-4. Model receives tool results and either calls more tools or writes the final response
-
-This is a standard [ReAct](https://arxiv.org/abs/2210.03629) agent loop. The Deep Agents framework handles the state machine, tool routing, and conversation persistence.
-
-<details>
-<summary><strong>All providers</strong></summary>
-
-**Data & Enrichment**
-
-| Provider | What it does |
-|---|---|
-| [Crustdata](https://crustdata.com) | LinkedIn-native person & company enrichment, headcount signals |
-| [People Data Labs](https://www.peopledatalabs.com) | Deep person & company enrichment, bulk operations |
-| [Forager](https://forager.ai) | Person, company, and job data; strong for phone recovery |
-| [Prospeo](https://prospeo.io) | Person & company enrichment, email finding, 30+ search filters |
-| [Apollo](https://apollo.io) | Person & company enrichment, search |
-| [Dropleads](https://dropleads.io) | Person search, email finding — free tier, broad coverage |
-| [Icypeas](https://icypeas.com) | Email search, recently-hired filtering, profile scraping |
-
-**Email Finding & Verification**
-
-| Provider | What it does |
-|---|---|
-| [Hunter](https://hunter.io) | Domain search, email finding, email verification |
-| [Leadmagic](https://leadmagic.io) | Email & mobile finding, validation, job change detection |
-| [ZeroBounce](https://zerobounce.net) | Email finding, batch validation, domain search |
-
-**Web & Research**
-
-| Provider | What it does |
-|---|---|
-| [Exa](https://exa.ai) | AI-powered web search, company & people search, content extraction |
-| [Firecrawl](https://firecrawl.dev) | Web scraping, crawling, structured extraction |
-| [Apify](https://apify.com) | LinkedIn scraper, Google Maps, custom actors |
-| [Google Search](https://developers.google.com/custom-search) | Custom web search |
-
-**Ad Intelligence**
-
-| Provider | What it does |
-|---|---|
-| [Adyntel](https://adyntel.com) | Facebook, Google, TikTok ad monitoring & keyword tracking |
-| [BuiltWith](https://builtwith.com) | Tech stack detection |
-
-**Sequencers & Outreach**
-
-| Provider | What it does |
-|---|---|
-| [Instantly](https://instantly.ai) | Email campaign management, lead import, performance stats |
-| [Lemlist](https://lemlist.com) | Multi-channel email + LinkedIn sequencing |
-| [SmartLead](https://smartlead.ai) | Email campaign management |
-| [HeyReach](https://heyreach.io) | LinkedIn outreach campaign management |
-
-**CRM & Data**
-
-| Provider | What it does |
-|---|---|
-| [HubSpot](https://hubspot.com) | CRM — read/write contacts, companies, deals, notes, tasks |
-| [Attio](https://attio.com) | CRM — contacts, companies, list entries |
-| [Salesforce](https://salesforce.com) | CRM — leads, contacts, accounts, opportunities |
-| [Snowflake](https://snowflake.com) | Direct SQL queries against your data warehouse |
-
-</details>
+You run the agent loop. Tools execute in your Python process via the Deepline HTTP API. More control, more operational overhead.
 
 ---
 
-## Quickstart
+## Quickstart (LangGraph)
 
-You need:
-- Python 3.11+
-- `DEEPLINE_API_KEY` from [code.deepline.com](https://code.deepline.com)
-- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+For the self-hosted LangGraph version:
 
 ```bash
-git clone https://github.com/jptoor/deepline-gtm-agent
-cd deepline-gtm-agent
 pip install ".[server]"
-
 export DEEPLINE_API_KEY=...
 export OPENAI_API_KEY=...
 export LLM_MODEL=openai:gpt-4o
-
 python server.py
 ```
 
