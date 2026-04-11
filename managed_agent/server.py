@@ -310,6 +310,35 @@ async def _slack_react(channel: str, ts: str, emoji: str, token: str, remove: bo
         pass
 
 
+async def _fetch_thread_history(channel: str, thread_ts: str, token: str, limit: int = 20) -> list[dict]:
+    """Fetch recent messages from a Slack thread for context."""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.get(
+                "https://slack.com/api/conversations.replies",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"channel": channel, "ts": thread_ts, "limit": limit},
+                timeout=10,
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            return []
+        messages = []
+        for msg in data.get("messages", [])[:-1]:  # exclude the current message (last)
+            text = msg.get("text", "").strip()
+            if text.startswith("<@"):
+                text = text.split(">", 1)[-1].strip()
+            if not text:
+                continue
+            role = "assistant" if msg.get("bot_id") else "user"
+            messages.append({"role": role, "content": text})
+        return messages
+    except Exception as e:
+        logger.warning("Failed to fetch thread history: %s", e)
+        return []
+
+
 async def _handle_slack_event(event: dict, team_id: str):
     """Process a Slack message via a Managed Agent session."""
     token = _workspace_tokens.get(team_id, SLACK_BOT_TOKEN)
@@ -327,6 +356,22 @@ async def _handle_slack_event(event: dict, team_id: str):
     logger.info("Slack: processing message from %s: %.80s", user_id, user_text)
     await _slack_react(channel, message_ts, "eyes", token)
 
+    # Fetch thread history for context (if this is a reply in a thread)
+    thread_context = ""
+    if event.get("thread_ts"):
+        history = await _fetch_thread_history(channel, thread_ts, token)
+        if history:
+            lines = []
+            for msg in history:
+                prefix = "User" if msg["role"] == "user" else "Agent"
+                lines.append(f"{prefix}: {msg['content']}")
+            thread_context = (
+                "\n\n## Thread context (previous messages in this Slack thread):\n"
+                + "\n\n".join(lines)
+                + "\n\n## Current message:\n"
+            )
+            logger.info("Slack: fetched %d prior messages from thread", len(history))
+
     session_id = None
     try:
         client = get_client()
@@ -338,7 +383,7 @@ async def _handle_slack_event(event: dict, team_id: str):
         )
         logger.info("Slack: session %s created, sending message", session_id)
 
-        prompt = f"{BOOTSTRAP_MSG}\n\nThen: {user_text}"
+        prompt = f"{BOOTSTRAP_MSG}\n\n{thread_context}Then: {user_text}"
         await loop.run_in_executor(None, send_message, client, session_id, prompt)
 
         def _collect():
