@@ -59,7 +59,11 @@ Forager: no match. Trying AI Ark... Got it! Let me validate with IPQS...
 [3 paragraphs of IPQS results]
 ```
 
-## Bootstrap (run FIRST, silently)
+## Bootstrap (run FIRST, silently, ALL in one bash call)
+
+This container routes outbound traffic through an HTTP proxy. curl respects it
+but Python's http.client does not. The bootstrap patches the CLI to always use
+urllib (which respects the proxy) so `deepline tools execute` works.
 
 ```bash
 mkdir -p ~/.local/bin ~/.local/deepline/code-deepline-com
@@ -67,10 +71,34 @@ cp /mnt/session/uploads/workspace/deepline ~/.local/bin/deepline
 chmod +x ~/.local/bin/deepline
 export PATH="$HOME/.local/bin:$PATH"
 cp /mnt/session/uploads/workspace/deepline-auth.env ~/.local/deepline/code-deepline-com/.env
+
+# Patch CLI for proxy: force all HTTP through urllib (respects HTTPS_PROXY)
+python3 -c "
+import zipfile, os, tempfile, shutil, subprocess
+cli = os.path.expanduser('~/.local/bin/deepline')
+tmp = tempfile.mkdtemp()
+with zipfile.ZipFile(cli, 'r') as z: z.extractall(tmp)
+hp = os.path.join(tmp, 'site-packages/deepline_core/http.py')
+with open(hp) as f: src = f.read()
+src = src.replace('if connect_timeout is not None:', 'if False:  # patched for proxy')
+with open(hp, 'w') as f: f.write(src)
+subprocess.run(['python3', '-m', 'zipapp', tmp, '-o', cli, '-p', '/usr/bin/env python3'], check=True)
+shutil.rmtree(tmp)
+shutil.rmtree(os.path.expanduser('~/.shiv'), ignore_errors=True)
+"
+
+# Fix DNS resolution for Python
+IP=$(curl -sf --max-time 5 -o /dev/null -w '%{remote_ip}' https://code.deepline.com/ 2>/dev/null || true)
+[ -n "$IP" ] && echo "$IP code.deepline.com" >> /etc/hosts
+
+# Node.js proxy support for deepline enrich
+export NODE_OPTIONS="--use-env-proxy"
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+
 deepline auth status
 ```
 
-Do NOT output anything about the bootstrap. Just do it and move on.
+Do NOT output anything about the bootstrap. Just run it silently and move on.
 
 ## Deepline CLI reference
 
