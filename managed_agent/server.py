@@ -24,6 +24,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+import re
+
 import anthropic
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -162,6 +164,98 @@ async def chat_stream(req: ChatRequest):
 # Slack
 # ---------------------------------------------------------------------------
 
+def md_to_slack(text: str) -> str:
+    """Convert GitHub-flavored Markdown to Slack mrkdwn.
+
+    Handles: headers, bold, italic, strikethrough, links, lists, blockquotes,
+    horizontal rules, code blocks, and -- critically -- markdown tables (which
+    Slack doesn't support at all).
+    """
+    # --- Preserve code blocks (don't convert inside them) ---
+    code_blocks: list[str] = []
+
+    def _stash_code(m: re.Match) -> str:
+        code_blocks.append(m.group(0))
+        return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
+
+    text = re.sub(r"```[\s\S]*?```", _stash_code, text)
+
+    # --- Tables → formatted text blocks ---
+    def _convert_table(m: re.Match) -> str:
+        lines = [l.strip() for l in m.group(0).strip().split("\n") if l.strip()]
+        # Parse header + body rows, skip separator lines (|---|---|)
+        rows = []
+        for line in lines:
+            if re.match(r"^\|[\s\-:|]+\|$", line):
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            rows.append(cells)
+        if not rows:
+            return m.group(0)
+
+        headers = rows[0]
+        data_rows = rows[1:]
+
+        # If table is small (<=3 cols), use key: value pairs per row
+        if len(headers) <= 3 and data_rows:
+            parts = []
+            for row in data_rows:
+                pair = " | ".join(
+                    f"*{headers[i]}:* {row[i]}" if i < len(headers) else row[i]
+                    for i in range(len(row))
+                )
+                parts.append(pair)
+            return "\n".join(parts)
+
+        # Wider tables: header row + aligned text rows
+        parts = [" | ".join(f"*{h}*" for h in headers)]
+        for row in data_rows:
+            parts.append(" | ".join(row))
+        return "\n".join(parts)
+
+    text = re.sub(
+        r"(?:^\|.+\|$\n?){2,}",
+        _convert_table,
+        text,
+        flags=re.MULTILINE,
+    )
+
+    # --- Headers: ## Title → *Title* ---
+    # First handle headers that follow text on the same line (no newline before ##)
+    text = re.sub(r"(?<!\n)(#{1,6}\s+)", r"\n\1", text)
+    text = re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=re.MULTILINE)
+
+    # --- Bold: **text** → *text* ---
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
+    text = re.sub(r"__([^_\n]+)__", r"*\1*", text)
+
+    # --- Strikethrough: ~~text~~ → ~text~ ---
+    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
+
+    # --- Links: [text](url) → <url|text> ---
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
+
+    # --- Horizontal rules → blank line ---
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+
+    # --- Blockquotes: > text → text (Slack doesn't render these) ---
+    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
+
+    # --- Unordered lists: - item → • item ---
+    text = re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=re.MULTILINE)
+
+    # --- Numbered lists: keep as-is (Slack renders 1. fine) ---
+
+    # --- Restore code blocks ---
+    for i, block in enumerate(code_blocks):
+        text = text.replace(f"__CODE_BLOCK_{i}__", block)
+
+    # --- Collapse excessive blank lines ---
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 
@@ -247,7 +341,25 @@ async def _handle_slack_event(event: dict, team_id: str):
         reply = await loop.run_in_executor(None, _collect)
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
-        await _slack_post(channel, reply or "(no response)", token, thread_ts)
+        slack_reply = md_to_slack(reply) if reply else "(no response)"
+
+        # Slack limits messages to ~4000 chars. Split if needed.
+        if len(slack_reply) <= 3900:
+            await _slack_post(channel, slack_reply, token, thread_ts)
+        else:
+            # Split on double newlines to avoid breaking mid-sentence
+            chunks = []
+            current = ""
+            for para in slack_reply.split("\n\n"):
+                if len(current) + len(para) + 2 > 3900:
+                    chunks.append(current.strip())
+                    current = para
+                else:
+                    current = current + "\n\n" + para if current else para
+            if current.strip():
+                chunks.append(current.strip())
+            for chunk in chunks:
+                await _slack_post(channel, chunk, token, thread_ts)
     except Exception as e:
         logger.exception("Slack handler error")
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
