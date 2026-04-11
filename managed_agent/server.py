@@ -172,8 +172,7 @@ def md_to_slack(text: str) -> str:
     """Convert GitHub-flavored Markdown to Slack mrkdwn.
 
     Handles: headers, bold, italic, strikethrough, links, lists, blockquotes,
-    horizontal rules, code blocks, and -- critically -- markdown tables (which
-    Slack doesn't support at all).
+    horizontal rules, code blocks, and markdown tables.
     """
     # --- Preserve code blocks (don't convert inside them) ---
     code_blocks: list[str] = []
@@ -185,12 +184,17 @@ def md_to_slack(text: str) -> str:
     text = re.sub(r"```[\s\S]*?```", _stash_code, text)
 
     # --- Tables → formatted text blocks ---
+    # Match both |col|col| style AND col | col | col style tables.
+    def _is_separator(line: str) -> bool:
+        """Check if a line is a markdown table separator like |---|---| or ---|---"""
+        stripped = line.strip().strip("|").strip()
+        return bool(re.match(r"^[\s\-:|]+$", stripped)) and "---" in stripped
+
     def _convert_table(m: re.Match) -> str:
         lines = [l.strip() for l in m.group(0).strip().split("\n") if l.strip()]
-        # Parse header + body rows, skip separator lines (|---|---|)
         rows = []
         for line in lines:
-            if re.match(r"^\|[\s\-:|]+\|$", line):
+            if _is_separator(line):
                 continue
             cells = [c.strip() for c in line.strip("|").split("|")]
             rows.append(cells)
@@ -200,7 +204,7 @@ def md_to_slack(text: str) -> str:
         headers = rows[0]
         data_rows = rows[1:]
 
-        # If table is small (<=3 cols), use key: value pairs per row
+        # For small tables (<=3 cols), use key:value pairs
         if len(headers) <= 3 and data_rows:
             parts = []
             for row in data_rows:
@@ -211,23 +215,36 @@ def md_to_slack(text: str) -> str:
                 parts.append(pair)
             return "\n".join(parts)
 
-        # Wider tables: header row + aligned text rows
+        # For wider tables: bold header row + data rows
         parts = [" | ".join(f"*{h}*" for h in headers)]
         for row in data_rows:
             parts.append(" | ".join(row))
         return "\n".join(parts)
 
+    # Match tables with | at edges
     text = re.sub(
         r"(?:^\|.+\|$\n?){2,}",
         _convert_table,
         text,
         flags=re.MULTILINE,
     )
+    # Match tables WITHOUT | at edges (e.g. "col1 | col2 | col3\n---|---\nval | val")
+    text = re.sub(
+        r"(?:^[^\n|]+\|[^\n]+$\n?){2,}",
+        _convert_table,
+        text,
+        flags=re.MULTILINE,
+    )
 
     # --- Headers: ## Title → *Title* ---
-    # First handle headers that follow text on the same line (no newline before ##)
-    text = re.sub(r"(?<!\n)(#{1,6}\s+)", r"\n\1", text)
-    text = re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=re.MULTILINE)
+    # Match # headers but NOT lines that look like table rows (contain |)
+    def _convert_header(m: re.Match) -> str:
+        content = m.group(2)
+        if "|" in content:
+            return m.group(0)  # table row, not a header
+        return f"*{content}*"
+
+    text = re.sub(r"^(#{1,6})\s+(.+?)(?:\s+#+)?$", _convert_header, text, flags=re.MULTILINE)
 
     # --- Bold: **text** → *text* ---
     text = re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
@@ -247,8 +264,6 @@ def md_to_slack(text: str) -> str:
 
     # --- Unordered lists: - item → • item ---
     text = re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=re.MULTILINE)
-
-    # --- Numbered lists: keep as-is (Slack renders 1. fine) ---
 
     # --- Restore code blocks ---
     for i, block in enumerate(code_blocks):
@@ -393,7 +408,14 @@ async def _handle_slack_event(event: dict, team_id: str):
                     parts.append(evt["text"])
                 elif evt["type"] == "done":
                     logger.info("Slack: session %s done (%s)", session_id, evt.get("reason"))
-            return "".join(parts)
+            # The agent emits multiple text blocks. If consecutive blocks don't
+            # end/start with newlines, headers get glued to preceding text
+            # (e.g. "Done.## Title"). Fix by ensuring block boundaries have spacing.
+            merged = "".join(parts)
+            # Insert newline before markdown headers that follow non-whitespace.
+            # Use negative lookbehind to avoid splitting ## into # + #
+            merged = re.sub(r"([^\n#])(#{1,6}\s)", r"\1\n\n\2", merged)
+            return merged
 
         logger.info("Slack: streaming events for session %s...", session_id)
         reply = await loop.run_in_executor(None, _collect)
