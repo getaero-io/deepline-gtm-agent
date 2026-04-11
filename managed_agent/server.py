@@ -322,16 +322,22 @@ async def _handle_slack_event(event: dict, team_id: str):
 
     message_ts = event.get("ts", "")
     thread_ts = event.get("thread_ts") or message_ts
+    user_id = event.get("user", "")
 
+    logger.info("Slack: processing message from %s: %.80s", user_id, user_text)
     await _slack_react(channel, message_ts, "eyes", token)
 
+    session_id = None
     try:
         client = get_client()
         loop = asyncio.get_event_loop()
 
+        logger.info("Slack: creating session...")
         session_id = await loop.run_in_executor(
             None, create_session, client, f"Slack: {user_text[:50]}"
         )
+        logger.info("Slack: session %s created, sending message", session_id)
+
         prompt = f"{BOOTSTRAP_MSG}\n\nThen: {user_text}"
         await loop.run_in_executor(None, send_message, client, session_id, prompt)
 
@@ -340,9 +346,13 @@ async def _handle_slack_event(event: dict, team_id: str):
             for evt in stream_events(client, session_id):
                 if evt["type"] == "text":
                     parts.append(evt["text"])
+                elif evt["type"] == "done":
+                    logger.info("Slack: session %s done (%s)", session_id, evt.get("reason"))
             return "".join(parts)
 
+        logger.info("Slack: streaming events for session %s...", session_id)
         reply = await loop.run_in_executor(None, _collect)
+        logger.info("Slack: got reply (%d chars) for session %s", len(reply or ""), session_id)
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
@@ -351,7 +361,6 @@ async def _handle_slack_event(event: dict, team_id: str):
         if len(slack_reply) <= 3900:
             await _slack_post(channel, slack_reply, token, thread_ts)
         else:
-            # Split on double newlines to avoid breaking mid-sentence
             chunks = []
             current = ""
             for para in slack_reply.split("\n\n"):
@@ -364,10 +373,14 @@ async def _handle_slack_event(event: dict, team_id: str):
                 chunks.append(current.strip())
             for chunk in chunks:
                 await _slack_post(channel, chunk, token, thread_ts)
+        logger.info("Slack: reply posted for session %s", session_id)
     except Exception as e:
-        logger.exception("Slack handler error")
-        await _slack_react(channel, message_ts, "eyes", token, remove=True)
-        await _slack_post(channel, f":warning: Error: {e}", token, thread_ts)
+        logger.exception("Slack handler error (session=%s)", session_id)
+        try:
+            await _slack_react(channel, message_ts, "eyes", token, remove=True)
+            await _slack_post(channel, f":warning: Error: {e}", token, thread_ts)
+        except Exception:
+            logger.exception("Failed to send error message to Slack")
 
 
 _seen_events: set[str] = set()

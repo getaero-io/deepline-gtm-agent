@@ -244,40 +244,102 @@ def send_message(client: anthropic.Anthropic, session_id: str, text: str) -> Non
     )
 
 
-def stream_events(client: anthropic.Anthropic, session_id: str) -> Iterator[dict]:
+def _parse_event(event) -> dict | None:
+    """Convert a raw SDK event to a simplified dict, or None to skip."""
+    etype = getattr(event, "type", None)
+
+    if etype == "agent.message":
+        for block in getattr(event, "content", []):
+            if getattr(block, "type", None) == "text":
+                return {"type": "text", "text": block.text}
+
+    elif etype == "agent.tool_use":
+        name = getattr(event, "name", "?")
+        inp = getattr(event, "input", {})
+        if name == "bash":
+            return {"type": "tool", "name": "bash", "command": inp.get("command", "")}
+        return {"type": "tool", "name": name}
+
+    elif etype == "session.status_idle":
+        stop_reason = getattr(event, "stop_reason", None)
+        stop_type = getattr(stop_reason, "type", None) if stop_reason else None
+        if stop_type == "requires_action":
+            return None  # transient idle, skip
+        return {"type": "done", "reason": stop_type or "unknown"}
+
+    elif etype == "session.status_terminated":
+        return {"type": "done", "reason": "terminated"}
+
+    return None
+
+
+def stream_events(client: anthropic.Anthropic, session_id: str, max_retries: int = 3) -> Iterator[dict]:
     """Yield simplified event dicts from the session stream.
 
-    Each dict has: type, text|command|name (depending on event type).
-    Stops on idle (non-requires_action) or terminated.
+    Reconnects automatically if the SSE stream drops mid-session.
+    Uses the consolidation pattern: on reconnect, fetch history via
+    events.list() to fill the gap, then resume the live stream.
     """
-    with client.beta.sessions.events.stream(session_id=session_id) as stream:
-        for event in stream:
-            etype = getattr(event, "type", None)
+    seen_ids: set[str] = set()
+    retries = 0
 
-            if etype == "agent.message":
-                for block in getattr(event, "content", []):
-                    if getattr(block, "type", None) == "text":
-                        yield {"type": "text", "text": block.text}
+    while retries <= max_retries:
+        try:
+            with client.beta.sessions.events.stream(session_id=session_id) as stream:
+                # On reconnect, backfill from history to cover the gap.
+                if retries > 0:
+                    logger.info("Reconnecting stream for %s (attempt %d), backfilling history...", session_id, retries)
+                    try:
+                        history = client.beta.sessions.events.list(session_id=session_id)
+                        for evt in history.data:
+                            eid = getattr(evt, "id", None)
+                            if eid and eid not in seen_ids:
+                                seen_ids.add(eid)
+                                parsed = _parse_event(evt)
+                                if parsed:
+                                    if parsed["type"] == "done":
+                                        yield parsed
+                                        return
+                                    yield parsed
+                    except Exception as e:
+                        logger.warning("History backfill failed: %s", e)
 
-            elif etype == "agent.tool_use":
-                name = getattr(event, "name", "?")
-                inp = getattr(event, "input", {})
-                if name == "bash":
-                    yield {"type": "tool", "name": "bash", "command": inp.get("command", "")}
-                else:
-                    yield {"type": "tool", "name": name}
+                for event in stream:
+                    eid = getattr(event, "id", None)
+                    if eid:
+                        if eid in seen_ids:
+                            continue
+                        seen_ids.add(eid)
 
-            elif etype == "session.status_idle":
-                stop_reason = getattr(event, "stop_reason", None)
-                stop_type = getattr(stop_reason, "type", None) if stop_reason else None
-                if stop_type == "requires_action":
-                    continue
-                yield {"type": "done", "reason": stop_type or "unknown"}
+                    parsed = _parse_event(event)
+                    if parsed:
+                        if parsed["type"] == "done":
+                            yield parsed
+                            return
+                        yield parsed
+
+                # Stream ended without a done event - check session status.
+                logger.warning("Stream ended without terminal event for %s", session_id)
+                try:
+                    session = client.beta.sessions.retrieve(session_id=session_id)
+                    if session.status in ("idle", "terminated"):
+                        yield {"type": "done", "reason": session.status}
+                        return
+                except Exception:
+                    pass
+                retries += 1
+
+        except Exception as e:
+            retries += 1
+            if retries > max_retries:
+                logger.error("Stream failed after %d retries for %s: %s", max_retries, session_id, e)
+                yield {"type": "done", "reason": f"error: {e}"}
                 return
+            logger.warning("Stream error for %s, retrying (%d/%d): %s", session_id, retries, max_retries, e)
+            import time
+            time.sleep(2)
 
-            elif etype == "session.status_terminated":
-                yield {"type": "done", "reason": "terminated"}
-                return
+    yield {"type": "done", "reason": "max_retries"}
 
 
 def run_prompt(
