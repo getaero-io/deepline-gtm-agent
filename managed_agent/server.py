@@ -54,6 +54,10 @@ def get_client() -> anthropic.Anthropic:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Deepline GTM Managed Agent server starting")
+    # Pre-fetch skill docs from CDN so they're cached for all sessions
+    from session import fetch_skill_docs_from_cdn
+    docs = fetch_skill_docs_from_cdn()
+    logger.info("Pre-fetched %d skill docs from CDN", len(docs))
     yield
 
 
