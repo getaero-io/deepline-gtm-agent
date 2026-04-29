@@ -7,11 +7,18 @@ Two backends:
 """
 
 import json
+import logging
 import os
 import subprocess
 from typing import Any
 
+from deepline_gtm_agent.cost_optimization import truncate_tool_result, short_error_stack
+
+logger = logging.getLogger(__name__)
+
 DEEPLINE_API_BASE = os.environ.get("DEEPLINE_API_BASE_URL", "https://code.deepline.com")
+TIMEOUT_SECONDS = 120
+MAX_RETRIES = 2
 
 
 def deepline_execute(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -19,11 +26,34 @@ def deepline_execute(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     Execute a Deepline tool operation and return the parsed result.
 
     Prefers HTTP API when DEEPLINE_API_KEY is set; falls back to CLI subprocess.
+    Includes retry logic for transient failures and truncates large results.
     """
     api_key = os.environ.get("DEEPLINE_API_KEY")
-    if api_key:
-        return _execute_http(operation, payload, api_key)
-    return _execute_cli(operation, payload)
+
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            if api_key:
+                result = _execute_http(operation, payload, api_key)
+            else:
+                result = _execute_cli(operation, payload)
+            return truncate_tool_result(result)
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            # Don't retry on auth/validation errors
+            if "401" in err_str or "403" in err_str or "CREDENTIALS_MISSING" in err_str:
+                raise
+            if "400" in err_str or "validation" in err_str.lower():
+                raise
+            # Retry on transient errors (429, 5xx, network)
+            if attempt < MAX_RETRIES - 1:
+                import time
+                wait = 2 ** attempt
+                logger.warning("Retrying %s in %ds (attempt %d): %s", operation, wait, attempt + 1, err_str[:100])
+                time.sleep(wait)
+
+    raise last_error
 
 
 def _execute_http(operation: str, payload: dict[str, Any], api_key: str) -> dict[str, Any]:

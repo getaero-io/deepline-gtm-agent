@@ -29,34 +29,8 @@ from deepline_gtm_agent.redis_client import append_history, get_history
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Markdown → Slack mrkdwn converter
-# ---------------------------------------------------------------------------
-
-import re as _re
-
-
-def md_to_slack(text: str) -> str:
-    """
-    Convert common Markdown patterns to Slack mrkdwn.
-    The LLM is prompted to output mrkdwn directly, but this acts as a safety net.
-    """
-    # Headers: ### Title → *Title*  (strip trailing # decorators too)
-    text = _re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=_re.MULTILINE)
-    # Bold: **text** or __text__ → *text*  (use [^*]+ to avoid crossing bold spans)
-    text = _re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
-    text = _re.sub(r"__([^_\n]+)__", r"*\1*", text)
-    # Strikethrough: ~~text~~ → ~text~
-    text = _re.sub(r"~~(.+?)~~", r"~\1~", text)
-    # Horizontal rules: --- or *** or ___ → blank line
-    text = _re.sub(r"^[-*_]{3,}\s*$", "", text, flags=_re.MULTILINE)
-    # Blockquotes: "> text" → text (Slack doesn't support blockquotes)
-    text = _re.sub(r"^>\s?", "", text, flags=_re.MULTILINE)
-    # Unordered list bullets: "- item" or "* item" → "• item"
-    text = _re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=_re.MULTILINE)
-    # Inline links: [text](url) → <url|text>  (Slack hyperlink format)
-    text = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
-    return text
+# Use unified formatter
+from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
@@ -78,8 +52,21 @@ def get_token_for_team(team_id: str) -> str:
     return _workspace_tokens.get(team_id, SLACK_BOT_TOKEN)
 
 
-# Dedup cache: Slack sometimes sends events twice. Track processed event IDs.
-_seen_event_ids: set[str] = set()
+# Dedup cache: Slack sometimes sends events twice. Use OrderedDict as LRU.
+from collections import OrderedDict
+_seen_event_ids: OrderedDict[str, None] = OrderedDict()
+_MAX_SEEN_EVENTS = 5000
+
+
+def _mark_event_seen(event_id: str) -> bool:
+    """Mark event as seen. Returns True if already seen (duplicate)."""
+    if event_id in _seen_event_ids:
+        return True
+    _seen_event_ids[event_id] = None
+    # LRU eviction: remove oldest entries instead of clearing all
+    while len(_seen_event_ids) > _MAX_SEEN_EVENTS:
+        _seen_event_ids.popitem(last=False)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +233,10 @@ async def handle_slack_event(payload: dict, agent_fn) -> None:
 
     logger.info("Slack event received: type=%s event_id=%s", event_type, event_id)
 
-    # Dedup
-    if event_id and event_id in _seen_event_ids:
+    # Dedup using LRU cache
+    if event_id and _mark_event_seen(event_id):
         logger.info("Skipping duplicate event: %s", event_id)
         return
-    if event_id:
-        _seen_event_ids.add(event_id)
-        if len(_seen_event_ids) > 10_000:
-            _seen_event_ids.clear()
 
     # Only handle user messages (ignore bot messages, including our own)
     if event.get("bot_id") or event.get("subtype"):

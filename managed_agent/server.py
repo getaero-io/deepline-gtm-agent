@@ -168,111 +168,11 @@ async def chat_stream(req: ChatRequest):
 # Slack
 # ---------------------------------------------------------------------------
 
-def md_to_slack(text: str) -> str:
-    """Convert GitHub-flavored Markdown to Slack mrkdwn.
-
-    Handles: headers, bold, italic, strikethrough, links, lists, blockquotes,
-    horizontal rules, code blocks, and markdown tables.
-    """
-    # --- Preserve code blocks (don't convert inside them) ---
-    code_blocks: list[str] = []
-
-    def _stash_code(m: re.Match) -> str:
-        code_blocks.append(m.group(0))
-        return f"__CODE_BLOCK_{len(code_blocks) - 1}__"
-
-    text = re.sub(r"```[\s\S]*?```", _stash_code, text)
-
-    # --- Tables → formatted text blocks ---
-    # Match both |col|col| style AND col | col | col style tables.
-    def _is_separator(line: str) -> bool:
-        """Check if a line is a markdown table separator like |---|---| or ---|---"""
-        stripped = line.strip().strip("|").strip()
-        return bool(re.match(r"^[\s\-:|]+$", stripped)) and "---" in stripped
-
-    def _convert_table(m: re.Match) -> str:
-        lines = [l.strip() for l in m.group(0).strip().split("\n") if l.strip()]
-        rows = []
-        for line in lines:
-            if _is_separator(line):
-                continue
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            rows.append(cells)
-        if not rows:
-            return m.group(0)
-
-        headers = rows[0]
-        data_rows = rows[1:]
-
-        # For small tables (<=3 cols), use key:value pairs
-        if len(headers) <= 3 and data_rows:
-            parts = []
-            for row in data_rows:
-                pair = " | ".join(
-                    f"*{headers[i]}:* {row[i]}" if i < len(headers) else row[i]
-                    for i in range(len(row))
-                )
-                parts.append(pair)
-            return "\n".join(parts)
-
-        # For wider tables: bold header row + data rows
-        parts = [" | ".join(f"*{h}*" for h in headers)]
-        for row in data_rows:
-            parts.append(" | ".join(row))
-        return "\n".join(parts)
-
-    # Match tables with | at edges
-    text = re.sub(
-        r"(?:^\|.+\|$\n?){2,}",
-        _convert_table,
-        text,
-        flags=re.MULTILINE,
-    )
-    # Match tables WITHOUT | at edges (e.g. "col1 | col2 | col3\n---|---\nval | val")
-    text = re.sub(
-        r"(?:^[^\n|]+\|[^\n]+$\n?){2,}",
-        _convert_table,
-        text,
-        flags=re.MULTILINE,
-    )
-
-    # --- Headers: ## Title → *Title* ---
-    # Match # headers but NOT lines that look like table rows (contain |)
-    def _convert_header(m: re.Match) -> str:
-        content = m.group(2)
-        if "|" in content:
-            return m.group(0)  # table row, not a header
-        return f"*{content}*"
-
-    text = re.sub(r"^(#{1,6})\s+(.+?)(?:\s+#+)?$", _convert_header, text, flags=re.MULTILINE)
-
-    # --- Bold: **text** → *text* ---
-    text = re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
-    text = re.sub(r"__([^_\n]+)__", r"*\1*", text)
-
-    # --- Strikethrough: ~~text~~ → ~text~ ---
-    text = re.sub(r"~~(.+?)~~", r"~\1~", text)
-
-    # --- Links: [text](url) → <url|text> ---
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
-
-    # --- Horizontal rules → blank line ---
-    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
-
-    # --- Blockquotes: > text → text (Slack doesn't render these) ---
-    text = re.sub(r"^>\s?", "", text, flags=re.MULTILINE)
-
-    # --- Unordered lists: - item → • item ---
-    text = re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=re.MULTILINE)
-
-    # --- Restore code blocks ---
-    for i, block in enumerate(code_blocks):
-        text = text.replace(f"__CODE_BLOCK_{i}__", block)
-
-    # --- Collapse excessive blank lines ---
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()
+# Import unified formatter from main package
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
 
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
@@ -424,22 +324,9 @@ async def _handle_slack_event(event: dict, team_id: str):
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
 
-        # Slack limits messages to ~4000 chars. Split if needed.
-        if len(slack_reply) <= 3900:
-            await _slack_post(channel, slack_reply, token, thread_ts)
-        else:
-            chunks = []
-            current = ""
-            for para in slack_reply.split("\n\n"):
-                if len(current) + len(para) + 2 > 3900:
-                    chunks.append(current.strip())
-                    current = para
-                else:
-                    current = current + "\n\n" + para if current else para
-            if current.strip():
-                chunks.append(current.strip())
-            for chunk in chunks:
-                await _slack_post(channel, chunk, token, thread_ts)
+        # Split long messages using shared utility
+        for chunk in truncate_for_slack(slack_reply):
+            await _slack_post(channel, chunk, token, thread_ts)
         logger.info("Slack: reply posted for session %s", session_id)
     except Exception as e:
         logger.exception("Slack handler error (session=%s)", session_id)
@@ -450,7 +337,20 @@ async def _handle_slack_event(event: dict, team_id: str):
             logger.exception("Failed to send error message to Slack")
 
 
-_seen_events: set[str] = set()
+# LRU dedup cache (same pattern as main slack module)
+from collections import OrderedDict
+_seen_events: OrderedDict[str, None] = OrderedDict()
+_MAX_SEEN = 5000
+
+
+def _mark_seen(event_id: str) -> bool:
+    """Returns True if duplicate."""
+    if event_id in _seen_events:
+        return True
+    _seen_events[event_id] = None
+    while len(_seen_events) > _MAX_SEEN:
+        _seen_events.popitem(last=False)
+    return False
 
 
 @app.post("/slack/events")
@@ -477,11 +377,8 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
         etype = event.get("type", "")
         ctype = event.get("channel_type", "")
 
-        if event_id in _seen_events:
+        if _mark_seen(event_id):
             return Response(status_code=200)
-        _seen_events.add(event_id)
-        if len(_seen_events) > 10_000:
-            _seen_events.clear()
 
         if event.get("bot_id") or event.get("subtype"):
             return Response(status_code=200)
