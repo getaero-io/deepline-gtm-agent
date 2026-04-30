@@ -6,8 +6,48 @@ Single source of truth for all Slack formatting. Import this everywhere.
 
 import re
 
+
+def _is_table_separator(line: str) -> bool:
+    """Check if line is a markdown table separator like |---|---|"""
+    stripped = line.strip().strip("|").strip()
+    return bool(re.match(r"^[\s\-:|]+$", stripped)) and "---" in stripped
+
+
+def _convert_table(m: re.Match) -> str:
+    """Convert markdown table to readable Slack text."""
+    lines = [l.strip() for l in m.group(0).strip().split("\n") if l.strip()]
+    rows = []
+    for line in lines:
+        if _is_table_separator(line):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        rows.append(cells)
+    if not rows:
+        return m.group(0)
+
+    headers = rows[0]
+    data_rows = rows[1:]
+
+    # For small tables (<=3 cols), use key:value pairs
+    if len(headers) <= 3 and data_rows:
+        parts = []
+        for row in data_rows:
+            pair = " | ".join(
+                f"*{headers[i]}:* {row[i]}" if i < len(headers) else row[i]
+                for i in range(len(row))
+            )
+            parts.append(pair)
+        return "\n".join(parts)
+
+    # For wider tables: bold header row + data rows
+    parts = [" | ".join(f"*{h}*" for h in headers)]
+    for row in data_rows:
+        parts.append(" | ".join(row))
+    return "\n".join(parts)
+
+
 def md_to_slack(text: str) -> str:
-    """Convert Markdown to Slack mrkdwn. Minimal, predictable transformations."""
+    """Convert Markdown to Slack mrkdwn. Handles tables, headers, formatting."""
     if not text:
         return ""
 
@@ -18,11 +58,22 @@ def md_to_slack(text: str) -> str:
         return f"__CB_{len(code_blocks) - 1}__"
     text = re.sub(r"```[\s\S]*?```", stash_code, text)
 
+    # Tables: convert before other transformations
+    # Match tables with | at edges
+    text = re.sub(r"(?:^\|.+\|$\n?){2,}", _convert_table, text, flags=re.MULTILINE)
+    # Match tables WITHOUT | at edges
+    text = re.sub(r"(?:^[^\n|]+\|[^\n]+$\n?){2,}", _convert_table, text, flags=re.MULTILINE)
+
     # Ensure headers have preceding newline (fixes "Done.## Title" → "Done.\n\n*Title*")
     text = re.sub(r"([^\n])(#{1,6}\s)", r"\1\n\n\2", text)
 
-    # Headers: ## Title → *Title*
-    text = re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=re.MULTILINE)
+    # Headers: ## Title → *Title* (but not table rows with |)
+    def convert_header(m: re.Match) -> str:
+        content = m.group(1)
+        if "|" in content:
+            return m.group(0)
+        return f"*{content}*"
+    text = re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", convert_header, text, flags=re.MULTILINE)
 
     # Bold: **text** → *text*
     text = re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)

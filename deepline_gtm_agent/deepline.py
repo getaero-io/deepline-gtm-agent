@@ -12,13 +12,23 @@ import os
 import subprocess
 from typing import Any
 
-from deepline_gtm_agent.cost_optimization import truncate_tool_result, short_error_stack
-
 logger = logging.getLogger(__name__)
 
 DEEPLINE_API_BASE = os.environ.get("DEEPLINE_API_BASE_URL", "https://code.deepline.com")
 TIMEOUT_SECONDS = 120
 MAX_RETRIES = 2
+
+# Read-only operations safe to retry on transient failures
+_IDEMPOTENT_PREFIXES = (
+    "search_", "list_", "get_", "query_", "find_", "lookup_", "read_",
+    "enrichment", "enrich_", "verify_", "research_", "scrape_",
+)
+
+
+def _is_idempotent(operation: str) -> bool:
+    """Check if operation is safe to retry (read-only)."""
+    op_lower = operation.lower()
+    return any(op_lower.startswith(p) or f"_{p}" in op_lower for p in _IDEMPOTENT_PREFIXES)
 
 
 def deepline_execute(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -26,18 +36,21 @@ def deepline_execute(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
     Execute a Deepline tool operation and return the parsed result.
 
     Prefers HTTP API when DEEPLINE_API_KEY is set; falls back to CLI subprocess.
-    Includes retry logic for transient failures and truncates large results.
+    Includes retry logic for transient failures on read-only operations.
+    Does NOT truncate results - callers handle their own presentation.
     """
     api_key = os.environ.get("DEEPLINE_API_KEY")
+    can_retry = _is_idempotent(operation)
 
     last_error = None
-    for attempt in range(MAX_RETRIES):
+    max_attempts = MAX_RETRIES if can_retry else 1
+
+    for attempt in range(max_attempts):
         try:
             if api_key:
-                result = _execute_http(operation, payload, api_key)
+                return _execute_http(operation, payload, api_key)
             else:
-                result = _execute_cli(operation, payload)
-            return truncate_tool_result(result)
+                return _execute_cli(operation, payload)
         except Exception as e:
             last_error = e
             err_str = str(e)
@@ -46,8 +59,8 @@ def deepline_execute(operation: str, payload: dict[str, Any]) -> dict[str, Any]:
                 raise
             if "400" in err_str or "validation" in err_str.lower():
                 raise
-            # Retry on transient errors (429, 5xx, network)
-            if attempt < MAX_RETRIES - 1:
+            # Only retry idempotent operations on transient errors
+            if can_retry and attempt < max_attempts - 1:
                 import time
                 wait = 2 ** attempt
                 logger.warning("Retrying %s in %ds (attempt %d): %s", operation, wait, attempt + 1, err_str[:100])

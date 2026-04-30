@@ -2,9 +2,13 @@
 Cost optimization utilities borrowed from Claude Code patterns.
 
 Key optimizations:
-1. Truncate large tool results with preview
+1. Truncate large tool results with preview (PRESENTATION LAYER ONLY)
 2. Short error stacks (5 frames max)
 3. Budget-aware skill descriptions
+
+IMPORTANT: truncate_tool_result should only be used when formatting
+output for display (Slack, chat UI). Never use it in the data pipeline
+where downstream code needs to parse the full result.
 """
 
 import json
