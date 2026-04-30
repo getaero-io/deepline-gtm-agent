@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GTM Agent Architecture Diagrams</title>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fafaf8;
+      --text: #1c1b18;
+      --text-muted: #6b6a65;
+      --border: #d0cec8;
+      --accent-blue: #1919FF;
+      --accent-amber: #d97706;
+      --card-bg: #ffffff;
+      --shadow: rgba(28, 27, 24, 0.08);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 80px 40px;
+    }
+
+    .diagram-container {
+      max-width: 1200px;
+      margin: 0 auto 120px;
+    }
+
+    .diagram-label {
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--accent-amber);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 32px;
+      font-weight: 600;
+      margin-bottom: 48px;
+      color: var(--text);
+    }
+
+    /* Architecture Flow Diagram */
+    .arch-flow {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 60px 40px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .arch-flow::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+      opacity: 0.03;
+      pointer-events: none;
+    }
+
+    .arch-node {
+      flex: 1;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .arch-node-box {
+      background: var(--bg);
+      border: 2px solid var(--border);
+      padding: 24px 20px;
+      border-radius: 2px;
+      margin: 0 auto;
+      max-width: 160px;
+      transition: all 0.2s ease;
+    }
+
+    .arch-node-box.highlight {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 4px rgba(25, 25, 255, 0.08);
+    }
+
+    .arch-node-box.pain {
+      border-color: #dc2626;
+      background: #fef2f2;
+    }
+
+    .arch-node-icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .arch-node-title {
+      font-family: 'Lora', serif;
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .arch-node-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .arch-arrow {
+      width: 80px;
+      height: 2px;
+      background: var(--border);
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .arch-arrow::after {
+      content: '';
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      border: 5px solid transparent;
+      border-left-color: var(--border);
+    }
+
+    .arch-arrow-label {
+      position: absolute;
+      top: -24px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      font-weight: 500;
+    }
+
+    /* Comparison Diagram */
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 80px 1fr;
+      gap: 0;
+      align-items: stretch;
+    }
+
+    .comparison-side {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 48px 40px;
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .comparison-side.bad {
+      border-color: #dc2626;
+    }
+
+    .comparison-side.bad::before {
+      content: 'WHAT WE BUILT';
+      position: absolute;
+      top: -12px;
+      left: 24px;
+      background: #dc2626;
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 12px;
+      letter-spacing: 0.05em;
+    }
+
+    .comparison-side.good {
+      border-color: #059669;
+    }
+
+    .comparison-side.good::before {
+      content: 'WHAT WE SHOULD HAVE BUILT';
+      position: absolute;
+      top: -12px;
+      left: 24px;
+      background: #059669;
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 12px;
+      letter-spacing: 0.05em;
+    }
+
+    .comparison-divider {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Lora', serif;
+      font-size: 14px;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .comparison-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .stack-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+    }
+
+    .stack-item.pain-high {
+      border-left: 4px solid #dc2626;
+    }
+
+    .stack-item.pain-low {
+      border-left: 4px solid #059669;
+    }
+
+    .stack-item-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .stack-item-content {
+      flex: 1;
+    }
+
+    .stack-item-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+
+    .stack-item-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .stack-item-loc {
+      font-family: 'SF Mono', 'Monaco', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--card-bg);
+      padding: 4px 8px;
+      border-radius: 2px;
+      border: 1px solid var(--border);
+    }
+
+    /* Pain Distribution */
+    .pain-chart {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 60px 48px;
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .pain-bar-container {
+      display: flex;
+      height: 80px;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 32px;
+      border: 1px solid var(--border);
+    }
+
+    .pain-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Lora', serif;
+      font-size: 24px;
+      font-weight: 700;
+      color: white;
+      position: relative;
+    }
+
+    .pain-bar.slack {
+      flex: 80;
+      background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    }
+
+    .pain-bar.agent {
+      flex: 20;
+      background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    }
+
+    .pain-legend {
+      display: flex;
+      gap: 48px;
+    }
+
+    .pain-legend-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .pain-legend-color {
+      width: 24px;
+      height: 24px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .pain-legend-color.red {
+      background: #dc2626;
+    }
+
+    .pain-legend-color.green {
+      background: #059669;
+    }
+
+    .pain-legend-label {
+      font-family: 'Lora', serif;
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .pain-legend-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      max-width: 320px;
+    }
+
+    .pain-legend-list {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .pain-legend-list li {
+      margin-bottom: 4px;
+      padding-left: 16px;
+      position: relative;
+    }
+
+    .pain-legend-list li::before {
+      content: '—';
+      position: absolute;
+      left: 0;
+    }
+
+    /* Quote callout */
+    .callout {
+      margin-top: 48px;
+      padding: 32px;
+      background: var(--bg);
+      border-left: 3px solid var(--accent-blue);
+      font-family: 'Lora', serif;
+      font-size: 18px;
+      font-style: italic;
+      color: var(--text);
+    }
+
+    .callout-author {
+      margin-top: 12px;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      font-style: normal;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Diagram 1: Architecture Flow -->
+  <div class="diagram-container">
+    <div class="diagram-label">Figure 1</div>
+    <h2>Production Architecture</h2>
+
+    <div class="arch-flow">
+      <div class="arch-node">
+        <div class="arch-node-box pain">
+          <span class="arch-node-icon">💬</span>
+          <div class="arch-node-title">Slack</div>
+          <div class="arch-node-subtitle">Events API</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">
+        <span class="arch-arrow-label">webhook</span>
+      </div>
+
+      <div class="arch-node">
+        <div class="arch-node-box pain">
+          <span class="arch-node-icon">⚡</span>
+          <div class="arch-node-title">FastAPI</div>
+          <div class="arch-node-subtitle">Railway</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">
+        <span class="arch-arrow-label">invoke</span>
+      </div>
+
+      <div class="arch-node">
+        <div class="arch-node-box highlight">
+          <span class="arch-node-icon">🤖</span>
+          <div class="arch-node-title">Claude</div>
+          <div class="arch-node-subtitle">Managed Agent</div>
+        </div>
+      </div>
+
+      <div class="arch-arrow">
+        <span class="arch-arrow-label">deepline_call</span>
+      </div>
+
+      <div class="arch-node">
+        <div class="arch-node-box highlight">
+          <span class="arch-node-icon">🔌</span>
+          <div class="arch-node-title">Deepline</div>
+          <div class="arch-node-subtitle">441+ tools</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diagram 2: Comparison -->
+  <div class="diagram-container">
+    <div class="diagram-label">Figure 2</div>
+    <h2>Architecture Comparison</h2>
+
+    <div class="comparison">
+      <div class="comparison-side bad">
+        <div class="comparison-stack">
+          <div class="stack-item pain-high">
+            <span class="stack-item-icon">💬</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Custom Slack Bot</div>
+              <div class="stack-item-desc">Manual event handling, signature verification, threading</div>
+            </div>
+            <span class="stack-item-loc">~400 LOC</span>
+          </div>
+          <div class="stack-item pain-high">
+            <span class="stack-item-icon">📝</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Markdown Converter</div>
+              <div class="stack-item-desc">Two implementations, table handling, edge cases</div>
+            </div>
+            <span class="stack-item-loc">~150 LOC</span>
+          </div>
+          <div class="stack-item pain-high">
+            <span class="stack-item-icon">🔄</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Stream Reconnection</div>
+              <div class="stack-item-desc">History backfill, dedup, race conditions</div>
+            </div>
+            <span class="stack-item-loc">~200 LOC</span>
+          </div>
+          <div class="stack-item pain-low">
+            <span class="stack-item-icon">🤖</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Agent Logic</div>
+              <div class="stack-item-desc">Tool routing, prompts, waterfalls</div>
+            </div>
+            <span class="stack-item-loc">~300 LOC</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="comparison-divider">vs</div>
+
+      <div class="comparison-side good">
+        <div class="comparison-stack">
+          <div class="stack-item pain-low">
+            <span class="stack-item-icon">📦</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Vercel AI SDK</div>
+              <div class="stack-item-desc">Streaming, formatting, reconnection handled</div>
+            </div>
+            <span class="stack-item-loc">npm install</span>
+          </div>
+          <div class="stack-item pain-low">
+            <span class="stack-item-icon">🔌</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Slack Adapter</div>
+              <div class="stack-item-desc">Thin wrapper, delegate to SDK</div>
+            </div>
+            <span class="stack-item-loc">~50 LOC</span>
+          </div>
+          <div class="stack-item pain-low">
+            <span class="stack-item-icon">🤖</span>
+            <div class="stack-item-content">
+              <div class="stack-item-title">Agent Logic</div>
+              <div class="stack-item-desc">Same as before - this part worked</div>
+            </div>
+            <span class="stack-item-loc">~300 LOC</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diagram 3: Pain Distribution -->
+  <div class="diagram-container">
+    <div class="diagram-label">Figure 3</div>
+    <h2>Where We Spent Our Time</h2>
+
+    <div class="pain-chart">
+      <div class="pain-bar-container">
+        <div class="pain-bar slack">80%</div>
+        <div class="pain-bar agent">20%</div>
+      </div>
+
+      <div class="pain-legend">
+        <div class="pain-legend-item">
+          <div class="pain-legend-color red"></div>
+          <div>
+            <div class="pain-legend-label">Slack Integration</div>
+            <div class="pain-legend-desc">
+              The "last mile" that consumed most debugging time
+            </div>
+            <ul class="pain-legend-list">
+              <li>Markdown-to-mrkdwn conversion bugs</li>
+              <li>Headers glued to preceding text</li>
+              <li>Table rendering in threads</li>
+              <li>Event deduplication race conditions</li>
+              <li>Stream reconnection logic</li>
+              <li>Message chunking for 4K limit</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="pain-legend-item">
+          <div class="pain-legend-color green"></div>
+          <div>
+            <div class="pain-legend-label">Agent Logic</div>
+            <div class="pain-legend-desc">
+              The part that actually worked well
+            </div>
+            <ul class="pain-legend-list">
+              <li>Claude Code patterns transferred</li>
+              <li>Skill docs provided context</li>
+              <li>Managed agent sandbox worked</li>
+              <li>Tool routing was reliable</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        "The agent's job is calling tools and reasoning. The UI layer's job is presenting that to users. Mixing them created coupling that made both harder to maintain."
+        <div class="callout-author">— Lesson learned</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

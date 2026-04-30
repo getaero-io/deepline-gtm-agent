@@ -1,159 +1,111 @@
-# Building a Production GTM Agent: What We Learned
+# Building a Production GTM Agent
 
-We built a GTM (go-to-market) agent that connects to 441+ sales and marketing tools. Here's what worked, what didn't, and what we'd do differently.
+We built a GTM agent that connects to 441 sales and marketing tools. Shipped it to Slack. Spent 80% of our time on Slack formatting bugs.
 
-## The Architecture
+The agent logic worked fine. The chat layer took four weeks of edge cases.
+
+## Architecture
 
 Two implementations running in parallel:
 
-1. **LangGraph agent** - Uses Deep Agents framework with LangChain tools
-2. **Managed Agent** - Anthropic's managed agent sandbox with CLI-based tool execution
+1. **LangGraph agent** - Deep Agents framework with LangChain tools
+2. **Managed Agent** - Anthropic sandbox with CLI tool execution
 
-Both share the same Deepline tool catalog and skill docs. The managed agent runs tools via subprocess in a sandboxed container; the LangGraph version calls the Deepline HTTP API directly.
+Both use the same Deepline tool catalog. The managed agent runs `deepline tools execute <tool_id> --payload '{...}'` via subprocess. LangGraph calls the HTTP API directly.
 
-## What Worked Well
+## What worked
 
-### 1. Claude Code optimizations transferred directly
+**Claude Code patterns transferred.** Waterfall enrichment, tool catalogs, provider playbooks - all worked out of the box. The skill docs we'd built for Claude Code gave the agent exactly the context it needed.
 
-Our existing Claude Code patterns - waterfall enrichment, tool catalogs, provider playbooks - worked out of the box. The local skill docs we'd built for Claude Code gave the agent exactly the context it needed to pick the right tools.
+Key patterns:
+- Full tool catalog embedded in the `deepline_call` description
+- Waterfall functions that exhaust multiple providers before failing
+- Structured output formats (person cards, company cards)
 
-Key patterns that carried over:
-- Embedding the full tool catalog in the `deepline_call` tool description
-- Waterfall functions that exhaust multiple providers before giving up
-- Structured output formats (person cards, company cards, lists)
+**The sandbox model is good.** Real filesystem, CLI access, persistent state. We upload the Deepline binary at session start. Every tool works automatically with zero custom definitions.
 
-### 2. Managed agents sandbox model
-
-The Anthropic managed agent sandbox was surprisingly productive. The agent has a real filesystem, can run CLI commands, and persists state across tool calls. We upload the Deepline CLI binary and auth credentials at session start, then the agent bootstraps itself.
-
-This meant zero custom tool definitions. The agent just runs `deepline tools execute <tool_id> --payload '...'` and parses the JSON output. Every tool in the Deepline catalog works automatically.
-
-### 3. Skill docs as context
-
-We host skill docs on a CDN and fetch them at session startup. The agent gets ~300KB of context about how to use each provider, common patterns, and exact tool IDs. This eliminated most hallucination about tool names and parameters.
+**Skill docs eliminate hallucination.** 300KB of context about provider patterns and exact tool IDs, fetched from CDN at startup.
 
 ```
 SKILLS_BASE = "https://code.deepline.com/.well-known/skills/gtm-meta-skill"
 CORE_SKILL_DOCS = [
     "SKILL.md",
     "finding-companies-and-contacts.md",
-    "enriching-and-researching.md",
     "provider-playbooks/apollo.md",
-    "provider-playbooks/hubspot.md",
     ...
 ]
 ```
 
-## What Didn't Work
+## What broke
 
-### 1. Slack interactivity was the hardest part
+**Slack formatting.** We spent more time debugging mrkdwn than agent logic.
 
-We spent more time debugging Slack formatting than the actual agent logic. Issues:
+Two markdown converters with different behavior. Headers glued to preceding text (`Done.## Next Steps`). Verbose narration ("I'll search for..." before every action). Markdown tables that Slack doesn't render.
 
-**Two different markdown converters**: We had one `md_to_slack()` in the LangGraph version and another in the managed agent version. They had different capabilities and produced inconsistent output.
-
-**Headers getting glued to text**: The agent emits multiple text blocks. When they concatenate, you get `Done.## Next Steps` instead of proper separation.
-
-**Verbose output**: Despite prompting for concise responses, the agent would explain what it was doing: "I'll now search for..." followed by the actual search, followed by "I found..." followed by the results.
-
-**Table rendering**: Markdown tables don't render in Slack. We built a converter, but it was brittle.
-
-### 2. Event deduplication memory leak
-
-Our dedup cache cleared entirely when it hit 10K entries:
+**Memory leak in dedup cache.** We cleared the whole cache at 10K entries:
 
 ```python
 if len(_seen_event_ids) > 10_000:
-    _seen_event_ids.clear()  # Bad!
+    _seen_event_ids.clear()  # Wrong
 ```
 
-The brief window after clear could cause duplicate event processing if Slack retried. Fixed with LRU eviction instead.
+Brief window after clear meant duplicate events if Slack retried. Fixed with LRU eviction.
 
-### 3. Blocking I/O in async context
+**Blocking I/O.** Sync tool functions called from async FastAPI. Every `deepline_execute()` blocked the event loop. Concurrent requests queued behind each other.
 
-The LangGraph version's tool functions were synchronous, but called from an async FastAPI server. Every `deepline_execute()` call blocked the event loop. With multiple concurrent Slack requests, they queued behind each other.
+**No timeouts.** Slow provider meant hung session. Added 120s timeout and retry logic for read-only operations.
 
-### 4. No timeout on tool calls
+## What we'd change
 
-If a Deepline tool hung (network issues, slow provider), the entire agent session hung indefinitely. We added timeouts and retry logic.
-
-## What We'd Do Differently
-
-### 1. Use Vercel AI SDK for the Slack layer
-
-The Slack bot code was 40% of our total codebase and 80% of the bugs. Streaming text to Slack, handling reconnects, formatting markdown - all of this is solved by the Vercel AI SDK's chat completion streaming.
+**Use Vercel AI SDK for chat.** The Slack bot was 40% of the codebase and 80% of the bugs. Streaming, reconnection, formatting - all solved problems we rebuilt from scratch.
 
 If we rebuilt today:
-- **Agent layer**: Keep the managed agent / LangGraph core. This part works great.
-- **Chat UI layer**: Replace the custom Slack bot with Vercel AI SDK + a thin Slack adapter.
+- Keep the managed agent core (it works)
+- Replace custom Slack bot with AI SDK + thin adapter
 
-The agent's job is calling tools and reasoning. The UI layer's job is presenting that to users. Mixing them created coupling that made both harder to maintain.
+Agents should call tools and reason. Chat layers should present output. We mixed them, and the coupling made both harder to maintain.
 
-### 2. Default to Opus for planning
+**Opus for planning.** Sonnet handles simple enrichments fine. Complex workflows (build TAM, research 20 companies, add to Instantly) need Opus - it plans better and makes fewer tool-call mistakes.
 
-For simple enrichment requests, Sonnet is fine. But for complex multi-step workflows (build a TAM list, research 20 companies, add qualified leads to Instantly), Opus plans better and makes fewer tool-call mistakes.
+**Structured output for data.** Free-form markdown for GTM data is fragile. JSON for data, markdown for summaries.
 
-We'd offer:
-- Sonnet for quick lookups (default for `/enrich`, `/search`)
-- Opus for planning workflows (default for `/build`, `/research`)
+**Cost tracking.** We had no visibility into credit consumption per request. Users burned quota on expensive waterfalls without knowing until their balance hit zero.
 
-### 3. Structured output, not free text
+## Cost patterns from Claude Code
 
-The agent returns free-form markdown. For GTM data (emails, phone numbers, LinkedIn URLs), this is fragile. A typo in the output format means broken parsing downstream.
-
-We'd use structured output (JSON) for data and only use markdown for human-readable summaries.
-
-### 4. Cost tracking per request
-
-Deepline operations consume credits, but we had no per-request cost tracking. Users would burn through their quota on expensive waterfall enrichments without visibility.
-
-We'd add:
-- Credit cost estimate before execution
-- Running total in the response
-- Budget limits per session/user
-
-## Cost Optimizations from Claude Code
-
-We borrowed several patterns from the Claude Code open source:
-
-### Truncate large tool results
+**Truncate large results** (presentation layer only):
 
 ```python
 MAX_TOOL_RESULT_CHARS = 8000
-PREVIEW_SIZE = 2000
 
 def truncate_tool_result(result):
     if isinstance(result, str) and len(result) > MAX_TOOL_RESULT_CHARS:
-        return f"{result[:PREVIEW_SIZE]}\n\n... (truncated, {len(result)} chars total)"
-    # Handle dicts/lists similarly
+        return f"{result[:2000]}\n\n... ({len(result)} chars total)"
 ```
 
-### Short error stacks
+**Short error stacks:**
 
 ```python
 def short_error_stack(e, max_frames=5):
-    """5 frames is usually enough to debug. Save tokens."""
+    # 5 frames is enough. Save tokens.
 ```
 
-### Skill budget constraints
+**Skill budget.** Claude Code caps skill descriptions at 1% of context. We were embedding 300KB - way over budget.
 
-Claude Code caps skill descriptions at 1% of context window and truncates individual descriptions to ~250 chars. We were embedding 300KB of skill docs - way over budget.
+## After fixes
 
-## The Numbers
+- Formatting bugs: 0 (was 4-5/week)
+- Duplicate events: 0 (was ~1%)
+- Timeout errors: 0 (was ~2%)
+- Response time: 8s (was 12s)
 
-After fixes:
-- **Slack formatting bugs**: 0 (down from 4-5 per week)
-- **Duplicate event processing**: 0 (was ~1% of events)
-- **Tool timeout errors**: 0 (was ~2% of requests)
-- **Average response time**: 8s (down from 12s with retry logic and parallel tool calls)
+## The lesson
 
-## Conclusion
+Agent logic was easy. Claude with good context and well-designed tools makes a capable agent.
 
-The agent layer was the easy part. Claude + good context + well-designed tools = a capable agent.
+Chat infrastructure was hard. Streaming, formatting, reconnection, error recovery - none of this is agent-specific. It's plumbing that every chat app needs.
 
-The hard part was the last mile: presenting agent output in a chat UI, handling streaming, formatting for different clients, error recovery. This is not agent-specific - it's chat infrastructure.
-
-Next time, we'd build the agent as a pure API (JSON in, JSON out) and use battle-tested chat infrastructure (Vercel AI SDK, stream.ai, etc.) for the UI layer.
+Build the agent as a pure API. Use battle-tested chat infrastructure for the UI.
 
 ---
 
