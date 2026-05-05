@@ -70,13 +70,7 @@ def enrich_person(
                 "last_name": last_name,
             })
             if result.get("email"):
-                return {
-                    "provider": "hunter",
-                    "email": result.get("email"),
-                    "name": f"{first_name} {last_name}".strip(),
-                    "company": company_name or company_domain,
-                    "linkedin_url": linkedin_url,
-                }
+                return {"provider": "hunter", **result}
         except Exception as e:
             logger.debug("hunter_email_finder failed for enrich_person: %s", e)
 
