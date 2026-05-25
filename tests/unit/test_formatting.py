@@ -31,6 +31,22 @@ class TestMdToSlackBold:
         result = md_to_slack("**a** and **b**")
         assert "*a*" in result and "*b*" in result
 
+    def test_triple_asterisk_bold_italic_to_slack_bold(self):
+        """***text*** (markdown bold+italic) must become *text* (Slack bold), not **text**."""
+        result = md_to_slack("***Morgan J Ingram***")
+        assert result == "*Morgan J Ingram*"
+
+    def test_triple_asterisk_in_sentence(self):
+        result = md_to_slack("Top Result: ***Morgan J Ingram*** — Sales Coach")
+        assert "*Morgan J Ingram*" in result
+        assert "**" not in result  # no residual double-asterisks
+
+    def test_triple_asterisk_multiple(self):
+        result = md_to_slack("***Alpha*** and ***Beta***")
+        assert "*Alpha*" in result
+        assert "*Beta*" in result
+        assert "***" not in result  # no triple asterisks survive
+
 
 # ---------------------------------------------------------------------------
 # md_to_slack — links

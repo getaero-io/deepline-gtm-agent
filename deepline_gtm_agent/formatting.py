@@ -76,6 +76,8 @@ def md_to_slack(text: str) -> str:
         return f"*{content}*"
     text = re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", convert_header, text, flags=re.MULTILINE)
 
+    # Bold+italic: ***text*** → *text* (Slack has no italic-via-asterisk, collapse to bold)
+    text = re.sub(r"\*{3}([^*\n]+)\*{3}", r"*\1*", text)
     # Bold: **text** → *text*
     text = re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
     text = re.sub(r"__([^_\n]+)__", r"*\1*", text)
