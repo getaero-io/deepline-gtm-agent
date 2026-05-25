@@ -168,10 +168,14 @@ async def chat_stream(req: ChatRequest):
 # Slack
 # ---------------------------------------------------------------------------
 
-# Import unified formatter from main package
+# Import unified formatter.
+# In Docker the build copies deepline_gtm_agent/ alongside server.py (both in /app/).
+# Locally, inserting the repo root makes the package importable from source.
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_repo_root = Path(__file__).parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
 
 
