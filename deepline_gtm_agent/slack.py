@@ -29,8 +29,39 @@ from deepline_gtm_agent.redis_client import append_history, get_history
 logger = logging.getLogger(__name__)
 
 
-# Use unified formatter
-from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
+# ---------------------------------------------------------------------------
+# Markdown → Slack mrkdwn converter
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+
+def md_to_slack(text: str) -> str:
+    """
+    Convert common Markdown patterns to Slack mrkdwn.
+    The LLM is prompted to output mrkdwn directly, but this acts as a safety net.
+    """
+    # Ensure headers that follow non-whitespace get a preceding newline.
+    # [^\n#] excludes '#' so we don't split "## Title" into "# \n\n # Title".
+    text = _re.sub(r"([^\n#])(#{1,6}\s)", r"\1\n\n\2", text)
+    # Headers: ### Title → *Title*  (strip trailing # decorators too)
+    text = _re.sub(r"^#{1,6}\s+(.+?)(?:\s+#+)?$", r"*\1*", text, flags=_re.MULTILINE)
+    # Bold+italic: ***text*** → *text* (Slack has no italic-via-asterisk, collapse to bold)
+    text = _re.sub(r"\*{3}([^*\n]+)\*{3}", r"*\1*", text)
+    # Bold: **text** or __text__ → *text*  (use [^*]+ to avoid crossing bold spans)
+    text = _re.sub(r"\*\*([^*\n]+)\*\*", r"*\1*", text)
+    text = _re.sub(r"__([^_\n]+)__", r"*\1*", text)
+    # Strikethrough: ~~text~~ → ~text~
+    text = _re.sub(r"~~(.+?)~~", r"~\1~", text)
+    # Horizontal rules: --- or *** or ___ → blank line
+    text = _re.sub(r"^[-*_]{3,}\s*$", "", text, flags=_re.MULTILINE)
+    # Blockquotes: "> text" → text (Slack doesn't support blockquotes)
+    text = _re.sub(r"^>\s?", "", text, flags=_re.MULTILINE)
+    # Unordered list bullets: "- item" or "* item" → "• item"
+    text = _re.sub(r"^[ \t]*[-*]\s+", "• ", text, flags=_re.MULTILINE)
+    # Inline links: [text](url) → <url|text>  (Slack hyperlink format)
+    text = _re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
+    return text
 
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
