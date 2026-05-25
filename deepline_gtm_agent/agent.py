@@ -13,6 +13,7 @@ from deepline_gtm_agent.icp import DEEPLINE_ICP_CONTEXT
 from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
 from deepline_gtm_agent.tools import (
+    batch_enrich,
     enrich_person,
     waterfall_enrich,
     search_prospects,
@@ -27,9 +28,11 @@ logger = logging.getLogger(__name__)
 
 # High-level GTM tools with waterfall logic and smart defaults.
 # These are the primary interface for common GTM operations.
+# batch_enrich is the correct interface for any CSV / list work (5+ records).
 GTM_HIGH_LEVEL_TOOLS: list[Callable] = [
-    waterfall_enrich,
-    enrich_person,
+    batch_enrich,       # PRIMARY for CSV/list work (5+ records) — uses deepline enrich subprocess
+    waterfall_enrich,   # single-record email waterfall
+    enrich_person,      # single-record person enrichment
     search_prospects,
     research_company,
     web_research,
