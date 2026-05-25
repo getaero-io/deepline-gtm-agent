@@ -5,9 +5,27 @@ Each function follows the Deep Agents convention:
 - Plain Python function with a clear docstring
 - Type-annotated parameters (auto-generate the tool schema)
 - Returns a dict or str that the agent can reason about
+
+Interface guidance
+------------------
+Single-record lookups (one person): use waterfall_enrich / enrich_person.
+  These call deepline_execute (equivalent to deepline tools execute) which is
+  fine for one-off operations.
+
+Batch / CSV work (5+ records): use batch_enrich.
+  This calls `deepline enrich` via subprocess, which has rate limiting,
+  Session UI visibility, retry safety, and auto-batching.
+  NEVER call waterfall_enrich in a loop over rows — use batch_enrich instead.
 """
 
+import csv
+import json
 import logging
+import os
+import subprocess
+import tempfile
+import time
+from pathlib import Path
 from typing import Optional
 from deepline_gtm_agent.deepline import deepline_execute
 
@@ -15,10 +33,21 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_linkedin_url(url: str) -> str:
-    """Ensure a LinkedIn URL is fully qualified with https://www.linkedin.com prefix."""
+    """
+    Ensure a LinkedIn URL is fully qualified with https://www.linkedin.com prefix.
+
+    Sales Navigator URLs (linkedin.com/sales/...) are NOT canonical and cannot be
+    used directly with enrichment providers. Callers should convert these via
+    crustdata_person_enrichment before passing to waterfall tools.
+    """
     if not url:
         return url
     url = url.strip().rstrip("/")
+    if "linkedin.com/sales/" in url:
+        logger.warning(
+            "Sales Navigator URL detected (%s). Extract canonical URL via "
+            "crustdata_person_enrichment before using with waterfall tools.", url
+        )
     if url.startswith("https://"):
         return url
     if url.startswith("http://"):
@@ -32,6 +61,14 @@ def _normalize_linkedin_url(url: str) -> str:
         slug = url.lstrip("/")
         return f"https://www.linkedin.com/{slug}"
     return url
+
+
+def _work_dir(slug: str | None = None) -> Path:
+    """Return ~/deepline/data/<slug>/ and create it. Never use /tmp."""
+    slug = slug or str(int(time.time()))
+    d = Path.home() / "deepline" / "data" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +97,29 @@ def enrich_person(
 
     if linkedin_url:
         linkedin_url = _normalize_linkedin_url(linkedin_url)
+
+    # Wiza — free first pass, strong US/EU coverage (no cost on miss)
+    if linkedin_url:
+        try:
+            result = deepline_execute("wiza_enrich_person", {"linkedin_url": linkedin_url})
+            if result.get("email") or (result.get("data") or {}).get("email"):
+                return {"provider": "wiza", **result}
+        except Exception as e:
+            logger.debug("wiza_enrich_person failed for enrich_person: %s", e)
+
+    # Dropleads — free, good EU/mid-market coverage (no cost on miss)
+    if first_name and last_name:
+        try:
+            dl_payload: dict = {"first_name": first_name, "last_name": last_name}
+            if company_domain:
+                dl_payload["company_domain"] = company_domain
+            if company_name:
+                dl_payload["company_name"] = company_name
+            result = deepline_execute("dropleads_email_finder", dl_payload)
+            if result.get("email") or (result.get("data") or {}).get("email"):
+                return {"provider": "dropleads", **result}
+        except Exception as e:
+            logger.debug("dropleads_email_finder failed for enrich_person: %s", e)
 
     # Hunter email finder — best for domain + name lookup
     if company_domain and first_name and last_name:
@@ -572,14 +632,23 @@ def waterfall_enrich(
         payload["company_name"] = company_name
 
     # Waterfall: try providers in cost order, stop on first hit.
-    # Note: Deepline "play" tools (name_and_company_to_email_waterfall, etc.) are
-    # CLI-only and cannot be called via the HTTP execute API.
-    # We implement the same sequence manually here.
+    # Tier 1 (free/no-cost-on-miss) always runs first.
+    # Tier 2 (paid) only runs after Tier 1 miss.
 
     providers_tried: list[str] = []
 
+    # 0. Wiza — free first pass, strong US/EU coverage (no cost on miss)
+    if linkedin_url:
+        try:
+            result = deepline_execute("wiza_enrich_person", {"linkedin_url": linkedin_url})
+            found = result.get("email") or (result.get("data", {}) or {}).get("email")
+            providers_tried.append("wiza_enrich_person")
+            if found:
+                return {"provider": "wiza_enrich_person", "email": found, **result}
+        except Exception as e:
+            logger.debug("wiza_enrich_person failed: %s", e)
+
     # 1. Dropleads email finder — free, fast
-    if first_name and last_name:
         dl_payload: dict = {"first_name": first_name, "last_name": last_name}
         if company_domain:
             dl_payload["company_domain"] = company_domain
@@ -765,6 +834,130 @@ def waterfall_enrich(
             "Tried all 9 providers. "
             "Coverage gaps are common for personal/SMB domains or very senior executives. "
             "Try phone enrichment via Forager (reveal_phones=True) or engage via LinkedIn instead."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch enrichment via deepline enrich (correct interface for CSV/list work)
+# ---------------------------------------------------------------------------
+
+
+def batch_enrich(
+    input_csv: str,
+    columns: Optional[list[str]] = None,
+    output_dir: Optional[str] = None,
+    rows: str = "0:1",
+    full_run: bool = False,
+) -> dict:
+    """
+    Enrich a CSV file using `deepline enrich` — the correct interface for batch work.
+
+    Unlike waterfall_enrich (which calls providers directly for single records),
+    this uses the Deepline enrichment engine which provides:
+    - Built-in rate limiting and auto-batching
+    - Session UI progress visibility
+    - Retry safety on provider failure
+    - Full audit trail in CSV lineage
+
+    ALWAYS call with rows="0:1" first (pilot), show the result, then call again
+    with full_run=True after user approval.
+
+    Args:
+        input_csv: Path to input CSV file.
+        columns: List of enrichment column specs, e.g.
+                 [{"tool_id": "wiza_enrich_person"}, {"tool_id": "dropleads_email_finder"}]
+                 If None, uses the standard email waterfall.
+        output_dir: Output directory. Defaults to ~/deepline/data/<timestamp>/.
+        rows: Row range to process, e.g. "0:1" for pilot, "0:50" for full run.
+        full_run: If True, processes all rows (ignores rows parameter).
+
+    Returns dict with output_csv path, fill_rate stats, and provider summary.
+    """
+    input_path = Path(input_csv).expanduser()
+    if not input_path.exists():
+        return {"error": f"Input CSV not found: {input_csv}"}
+
+    # Write to proper working directory — never /tmp
+    work = _work_dir()
+    output_path = work / f"{input_path.stem}_enriched.csv"
+
+    # Default email waterfall columns if none specified
+    if not columns:
+        columns = [
+            {"tool_id": "wiza_enrich_person"},
+            {"tool_id": "dropleads_email_finder"},
+            {"tool_id": "hunter_email_finder"},
+            {"tool_id": "leadmagic_email_finder"},
+            {"tool_id": "crustdata_person_enrichment"},
+            {"tool_id": "icypeas_email_search"},
+            {"tool_id": "prospeo_person_enrichment"},
+            {"tool_id": "forager_person_detail_lookup"},
+        ]
+
+    # Build enrich command
+    cmd = [
+        "deepline", "enrich",
+        "--input", str(input_path),
+        "--output", str(output_path),
+        "--json",
+    ]
+
+    # Add each column as --with arg
+    for col in columns:
+        cmd += ["--with", json.dumps(col)]
+
+    # Row range (pilot vs full)
+    if not full_run and rows:
+        cmd += ["--rows", rows]
+
+    logger.info("Running: %s", " ".join(cmd))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"error": "deepline enrich timed out after 5 minutes"}
+    except FileNotFoundError:
+        return {"error": "deepline CLI not found — install with: npm i -g deepline"}
+
+    if result.returncode != 0:
+        return {
+            "error": f"deepline enrich failed (exit {result.returncode})",
+            "stderr": result.stderr[-500:] if result.stderr else "",
+        }
+
+    # Parse summary from stdout
+    summary: dict = {}
+    try:
+        summary = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Read output CSV summary (never read full CSV into context)
+    csv_stats: dict = {}
+    if output_path.exists():
+        try:
+            show_result = subprocess.run(
+                ["deepline", "csv", "show", "--csv", str(output_path), "--summary"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if show_result.returncode == 0:
+                try:
+                    csv_stats = json.loads(show_result.stdout)
+                except (json.JSONDecodeError, ValueError):
+                    csv_stats = {"summary": show_result.stdout[:500]}
+        except Exception as e:
+            logger.debug("csv show failed: %s", e)
+
+    return {
+        "output_csv": str(output_path),
+        "rows_processed": "all" if full_run else rows,
+        "columns_enriched": len(columns),
+        "summary": summary,
+        "csv_stats": csv_stats,
+        "pilot_done": not full_run,
+        "next_step": (
+            "Pilot complete. Review results above, then call batch_enrich again "
+            "with full_run=True to process all rows." if not full_run else None
         ),
     }
 
