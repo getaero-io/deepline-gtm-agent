@@ -32,7 +32,7 @@ GTM_SKILL_DIR = Path(os.environ.get("GTM_SKILL_DIR", Path.home() / ".claude/skil
 BOOTSTRAP_MSG = (
     "Bootstrap the deepline CLI. Run ALL of these commands in a single bash call:\n\n"
     "```bash\n"
-    "mkdir -p ~/.local/bin ~/.local/deepline/code-deepline-com\n"
+    "mkdir -p ~/.local/bin ~/.local/deepline/code-deepline-com ~/deepline/data\n"
     "cp /mnt/session/uploads/workspace/deepline ~/.local/bin/deepline\n"
     "chmod +x ~/.local/bin/deepline\n"
     "export PATH=\"$HOME/.local/bin:$PATH\"\n"

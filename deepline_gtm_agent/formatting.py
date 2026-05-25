@@ -65,7 +65,8 @@ def md_to_slack(text: str) -> str:
     text = re.sub(r"(?:^[^\n|]+\|[^\n]+$\n?){2,}", _convert_table, text, flags=re.MULTILINE)
 
     # Ensure headers have preceding newline (fixes "Done.## Title" → "Done.\n\n*Title*")
-    text = re.sub(r"([^\n])(#{1,6}\s)", r"\1\n\n\2", text)
+    # [^\n#] excludes '#' so we don't split "## Title" into "# \n\n # Title"
+    text = re.sub(r"([^\n#])(#{1,6}\s)", r"\1\n\n\2", text)
 
     # Headers: ## Title → *Title* (but not table rows with |)
     def convert_header(m: re.Match) -> str:

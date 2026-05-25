@@ -27,3 +27,18 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["deepline_gtm_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["deepline_gtm_agent", "managed_agent"]
+omit = ["tests/*", "*/setup.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
