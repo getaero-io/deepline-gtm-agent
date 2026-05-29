@@ -54,6 +54,7 @@ The agent handles core GTM workflows, each backed by a waterfall of data provide
 | **Verify emails** | "Is jsmith@acme.com safe to send?" | LeadMagic → ZeroBounce; returns valid/invalid + MX provider + sub-status |
 | **Find LinkedIn URLs** | "LinkedIn for Tom Nguyen at Notion" | Deepline Native Prospector → Exa web; returns URL + confidence level |
 | **Build company lists** | "Find 25 fintech companies in NYC, 100–500 employees" | Apollo company search; returns name, domain, headcount, industry, description |
+| **Build durable prospect lists** | "Build a CSV of 50 VP Engineering contacts at AI infrastructure companies" | Seed CSV → `deepline enrich --rows 0:1` pilot → approval → full run + CSV artifact |
 | **CRM read/write** | "Create a HubSpot contact for Jane Doe" | Full HubSpot, Salesforce, and Attio access via `deepline_call` |
 | **Outreach** | "Show me my Lemlist campaigns" | Instantly, Lemlist, Smartlead, HeyReach — full campaign and lead management |
 
@@ -81,7 +82,7 @@ Anthropic Managed Agents         <-- agent loop + sandboxed container
 Deepline API (code.deepline.com) <-- 441+ integrations
 ```
 
-The agent runs the `deepline` CLI inside Anthropic's sandbox. It reads skill docs, picks providers, runs waterfalls, handles retries - all autonomously. Your server just brokers the connection.
+The agent runs the `deepline` CLI inside Anthropic's sandbox. It reads skill docs, picks providers, runs waterfalls, handles retries - all autonomously. Your server just brokers the connection. For bulk list work, the self-hosted LangGraph path also exposes a durable prospect-list job tool that creates seed CSV artifacts and pilots row-level enrichment before full runs.
 
 ### LangGraph (self-hosted alternative)
 
@@ -91,7 +92,7 @@ Slack / REST / Web UI
       v
 FastAPI + LangGraph              <-- agent loop + tool execution on YOUR server
       |  model: claude-opus-4-6 / gpt-4o / gemini-2.0-flash
-      |  8 high-level tools + deepline_call passthrough
+      |  High-level GTM tools + deepline_call passthrough
       |
       v
 Deepline API (code.deepline.com) <-- 441+ integrations
@@ -175,7 +176,7 @@ print(result["messages"][-1].content)
 
 ## Tools
 
-Nine tools are registered on the agent. The eight high-level tools handle common GTM workflows with built-in waterfalls. `deepline_call` is a passthrough to all 441+ Deepline integrations — CRM, outreach, scraping, and anything not covered by a dedicated tool.
+High-level GTM tools handle common workflows with built-in waterfalls and durable list-job orchestration. `deepline_call` is a passthrough to all 441+ Deepline integrations — CRM, outreach, scraping, and anything not covered by a dedicated tool.
 
 ### `waterfall_enrich`
 
@@ -226,6 +227,25 @@ Nine tools are registered on the agent. The eight high-level tools handle common
 **Returns:** `{prospects: [{name, title, company, linkedin_url, email, location, company_size, industry, has_email}], count, total, provider}`
 
 **Limitations:** Dropleads filters by country only — city-level filtering falls back to Icypeas. Dropleads industry taxonomy is narrow — if 0 results are returned with an industry filter, the tool retries without it and notes the limitation.
+
+---
+
+### `build_prospect_list_job`
+
+**When to use:** Bulk prospecting or account-list requests where the user expects a CSV/list artifact, not a one-off answer or markdown table.
+
+**Inputs:** `criteria`, `target_count`, optional `persona`, optional `discovery_tool_id` + `discovery_payload`, optional `seed_rows` or `seed_csv_path`, optional `enrichment_columns`, optional `run_full`.
+
+**Lifecycle:**
+1. Over-provision seed rows to account for downstream misses.
+2. Write an auditable `seed_companies.csv`.
+3. Run a `deepline enrich --rows 0:1` pilot for row-level contact/research enrichment.
+4. Stop for review by default.
+5. Run the full enrichment only when `run_full=True`, preferably with the approved `seed_csv_path` returned by the pilot.
+
+**Returns:** `{job_status, plan_path, seed_csv, seed_summary, pilot, output_csv, output_summary, next_step}`.
+
+Use this over freeform web research for 5+ requested rows.
 
 ---
 
@@ -301,7 +321,7 @@ Email status guide: `valid` = send • `catch_all` = use with caution • `inval
 
 ### `deepline_call`
 
-**When to use:** Anything not covered by the eight high-level tools above — CRM operations, outreach campaign management, LinkedIn scraping, ad intelligence, or any of the 441+ Deepline integrations.
+**When to use:** Anything not covered by the high-level tools above — CRM operations, outreach campaign management, LinkedIn scraping, ad intelligence, or any of the 441+ Deepline integrations.
 
 **Inputs:** `tool_id` (string), `payload` (dict). The full tool catalog is embedded in the tool's description — the agent selects `tool_id` automatically based on the request.
 

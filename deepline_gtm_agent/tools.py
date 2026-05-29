@@ -12,7 +12,10 @@ Single-record lookups (one person): use waterfall_enrich / enrich_person.
   These call deepline_execute (equivalent to deepline tools execute) which is
   fine for one-off operations.
 
-Batch / CSV work (5+ records): use batch_enrich.
+Bulk prospecting/list jobs (5+ requested rows): use build_prospect_list_job.
+  It creates a seed CSV, runs a pilot, and returns durable artifacts.
+
+Batch / CSV enrichment on an existing file (5+ records): use batch_enrich.
   This calls `deepline enrich` via subprocess, which has rate limiting,
   Session UI visibility, retry safety, and auto-batching.
   NEVER call waterfall_enrich in a loop over rows — use batch_enrich instead.
@@ -22,11 +25,12 @@ import csv
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from deepline_gtm_agent.deepline import deepline_execute
 
 logger = logging.getLogger(__name__)
@@ -69,6 +73,144 @@ def _work_dir(slug: str | None = None) -> Path:
     d = Path.home() / "deepline" / "data" / slug
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _slugify(value: str, fallback: str = "prospect-list") -> str:
+    """Create a readable filesystem slug for Deepline job artifacts."""
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip().lower()).strip("-")
+    return (slug or fallback)[:80]
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str] | None = None) -> None:
+    """Write dictionaries to CSV with stable, unioned fieldnames."""
+    if not rows:
+        raise ValueError("Cannot write an empty CSV")
+    ordered_fields: list[str] = []
+    for field in fieldnames or []:
+        if field not in ordered_fields:
+            ordered_fields.append(field)
+    for row in rows:
+        for key in row:
+            if key not in ordered_fields:
+                ordered_fields.append(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=ordered_fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    """Read a seed CSV back into row dictionaries."""
+    with path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        return [dict(row) for row in reader]
+
+
+def _csv_summary(path: Path) -> dict[str, Any]:
+    """Return lightweight CSV stats without loading large files into the model."""
+    if not path.exists():
+        return {"exists": False, "row_count": 0}
+    with path.open(newline="") as f:
+        reader = csv.DictReader(f)
+        sample_rows = []
+        row_count = 0
+        for row in reader:
+            row_count += 1
+            if len(sample_rows) < 3:
+                sample_rows.append(row)
+        columns = reader.fieldnames or []
+    return {
+        "exists": True,
+        "row_count": row_count,
+        "columns": columns,
+        "sample_rows": sample_rows,
+    }
+
+
+def _extract_json_array(text: str) -> list[Any] | None:
+    """Best-effort extraction for provider outputs that wrap JSON in prose."""
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in ("companies", "accounts", "rows", "results", "data"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    return value
+    except (TypeError, json.JSONDecodeError):
+        pass
+
+    match = re.search(r"\[[\s\S]*\]", text)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def _coerce_seed_rows(raw: Any) -> list[dict[str, Any]]:
+    """Normalize common Deepline/provider response shapes into seed rows."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        candidates = raw
+    elif isinstance(raw, dict):
+        candidates = []
+        for key in ("companies", "accounts", "rows", "results", "data"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                candidates = value
+                break
+            if isinstance(value, dict):
+                nested = _coerce_seed_rows(value)
+                if nested:
+                    return nested
+        if not candidates and isinstance(raw.get("output"), str):
+            candidates = _extract_json_array(raw["output"]) or []
+    elif isinstance(raw, str):
+        candidates = _extract_json_array(raw) or []
+    else:
+        candidates = []
+
+    rows: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = (
+            item.get("company_name")
+            or item.get("name")
+            or item.get("company")
+            or item.get("organization_name")
+        )
+        domain = (
+            item.get("domain")
+            or item.get("company_domain")
+            or item.get("website")
+            or item.get("url")
+        )
+        row = dict(item)
+        if name:
+            row.setdefault("company_name", name)
+        if domain:
+            domain_text = str(domain).strip()
+            domain_text = re.sub(r"^https?://", "", domain_text).split("/")[0]
+            row.setdefault("domain", domain_text)
+        if row.get("company_name") or row.get("domain"):
+            rows.append(row)
+    return rows
+
+
+def _normalize_enrich_column(column: dict[str, Any]) -> dict[str, Any]:
+    """Accept older tool_id-shaped specs but emit Deepline enrich's tool key."""
+    normalized = dict(column)
+    if "tool" not in normalized and "tool_id" in normalized:
+        normalized["tool"] = normalized["tool_id"]
+    normalized.setdefault("alias", normalized.get("tool") or normalized.get("tool_id") or "enrichment")
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -845,7 +987,7 @@ def waterfall_enrich(
 
 def batch_enrich(
     input_csv: str,
-    columns: Optional[list[str]] = None,
+    columns: Optional[list[dict[str, Any]]] = None,
     output_dir: Optional[str] = None,
     rows: str = "0:1",
     full_run: bool = False,
@@ -865,9 +1007,10 @@ def batch_enrich(
 
     Args:
         input_csv: Path to input CSV file.
-        columns: List of enrichment column specs, e.g.
-                 [{"tool_id": "wiza_enrich_person"}, {"tool_id": "dropleads_email_finder"}]
-                 If None, uses the standard email waterfall.
+        columns: List of Deepline enrich column specs using keys such as
+            alias, tool, payload, and extract_js. Older tool_id-shaped specs are
+            normalized to the current tool key. If None, uses the standard email
+            waterfall.
         output_dir: Output directory. Defaults to ~/deepline/data/<timestamp>/.
         rows: Row range to process, e.g. "0:1" for pilot, "0:50" for full run.
         full_run: If True, processes all rows (ignores rows parameter).
@@ -879,20 +1022,21 @@ def batch_enrich(
         return {"error": f"Input CSV not found: {input_csv}"}
 
     # Write to proper working directory — never /tmp
-    work = _work_dir()
+    work = Path(output_dir).expanduser() if output_dir else _work_dir()
+    work.mkdir(parents=True, exist_ok=True)
     output_path = work / f"{input_path.stem}_enriched.csv"
 
     # Default email waterfall columns if none specified
     if not columns:
         columns = [
-            {"tool_id": "wiza_enrich_person"},
-            {"tool_id": "dropleads_email_finder"},
-            {"tool_id": "hunter_email_finder"},
-            {"tool_id": "leadmagic_email_finder"},
-            {"tool_id": "crustdata_person_enrichment"},
-            {"tool_id": "icypeas_email_search"},
-            {"tool_id": "prospeo_person_enrichment"},
-            {"tool_id": "forager_person_detail_lookup"},
+            {"alias": "wiza_email", "tool": "wiza_enrich_person", "payload": {"linkedin_url": "{{linkedin_url}}"}},
+            {"alias": "dropleads_email", "tool": "dropleads_email_finder", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
+            {"alias": "hunter_email", "tool": "hunter_email_finder", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
+            {"alias": "leadmagic_email", "tool": "leadmagic_email_finder", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
+            {"alias": "crustdata_person", "tool": "crustdata_person_enrichment", "payload": {"linkedinProfileUrl": "{{linkedin_url}}"}},
+            {"alias": "icypeas_email", "tool": "icypeas_email_search", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
+            {"alias": "prospeo_person", "tool": "prospeo_person_enrichment", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
+            {"alias": "forager_person", "tool": "forager_person_detail_lookup", "payload": {"first_name": "{{first_name}}", "last_name": "{{last_name}}", "domain": "{{domain}}"}},
         ]
 
     # Build enrich command
@@ -905,7 +1049,7 @@ def batch_enrich(
 
     # Add each column as --with arg
     for col in columns:
-        cmd += ["--with", json.dumps(col)]
+        cmd += ["--with", json.dumps(_normalize_enrich_column(col))]
 
     # Row range (pilot vs full)
     if not full_run and rows:
@@ -960,6 +1104,264 @@ def batch_enrich(
             "with full_run=True to process all rows." if not full_run else None
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Durable prospect list jobs
+# ---------------------------------------------------------------------------
+
+
+def build_prospect_list_job(
+    criteria: str,
+    target_count: int = 25,
+    persona: Optional[str] = None,
+    discovery_tool_id: Optional[str] = None,
+    discovery_payload: Optional[dict[str, Any]] = None,
+    seed_rows: Optional[list[dict[str, Any]]] = None,
+    seed_csv_path: Optional[str] = None,
+    enrichment_columns: Optional[list[dict[str, Any]]] = None,
+    output_dir: Optional[str] = None,
+    run_full: bool = False,
+) -> dict:
+    """
+    Run a durable prospect/list-building job instead of freeform research.
+
+    Use this for bulk prospecting or account-list tasks (5+ requested rows). The
+    job follows the Deepline docs pattern:
+    1. build an auditable seed CSV,
+    2. run a deepline enrich --rows 0:1 pilot for row-level people/research work,
+    3. stop for review by default,
+    4. optionally run the full enrichment after explicit approval.
+
+    Args:
+        criteria: Natural-language ICP/list criteria.
+        target_count: Number of final complete rows requested.
+        persona: Optional contact/persona target to find at each seed company.
+        discovery_tool_id: Optional Deepline search tool to run for seed rows
+            (for example crustdata_companydb_search or dropleads_search_people).
+        discovery_payload: Payload for discovery_tool_id.
+        seed_rows: Optional pre-discovered company/account rows. If omitted, the
+            tool runs discovery_tool_id, or asks Exa research for a JSON company
+            seed list as a generic fallback.
+        seed_csv_path: Existing seed CSV from a previous pilot. Use this with
+            run_full=True after approval to avoid rediscovery.
+        enrichment_columns: Optional explicit Deepline enrich column specs. If
+            omitted and persona is provided, uses exa_people_search per company.
+        output_dir: Optional artifact directory. Defaults to ~/deepline/data/<slug>/.
+        run_full: False by default. Set True only after the pilot is approved.
+
+    Returns:
+        Job metadata, seed CSV path, pilot/full output paths, validation stats,
+        and the recommended next step.
+    """
+    try:
+        target_count = int(target_count or 25)
+    except (TypeError, ValueError):
+        target_count = 25
+    target_count = max(1, min(target_count, 1000))
+    seed_target = max(target_count, int(target_count * 1.4 + 0.999))
+    slug = _slugify(criteria)
+    seed_csv = Path(seed_csv_path).expanduser() if seed_csv_path else None
+    if output_dir:
+        work = Path(output_dir).expanduser()
+    elif seed_csv:
+        work = seed_csv.parent
+    else:
+        work = _work_dir(slug)
+    work.mkdir(parents=True, exist_ok=True)
+
+    plan = {
+        "criteria": criteria,
+        "target_count": target_count,
+        "seed_target": seed_target,
+        "persona": persona,
+        "discovery_tool_id": discovery_tool_id or "exa_research",
+        "seed_csv_path": str(seed_csv) if seed_csv else None,
+        "phases": [
+            "discover seed companies/accounts",
+            "write seed CSV",
+            "pilot row-level enrichment with deepline enrich --rows 0:1",
+            "review pilot output",
+            "run full enrichment after approval",
+            "validate final CSV and deliver artifacts",
+        ],
+    }
+    plan_path = work / "prospect_job_plan.json"
+    plan_path.write_text(json.dumps(plan, indent=2) + "\n")
+
+    discovery_raw: Any = None
+    using_existing_seed_csv = seed_csv is not None
+    if seed_csv:
+        if not seed_csv.exists():
+            return {
+                "job_status": "missing_seed_csv",
+                "plan_path": str(plan_path),
+                "seed_csv": str(seed_csv),
+                "error": f"Seed CSV not found: {seed_csv}",
+                "next_step": "Pass a valid seed_csv_path from the approved pilot job.",
+            }
+        seed_rows = _read_csv_rows(seed_csv)
+    elif seed_rows is None:
+        try:
+            if discovery_tool_id:
+                discovery_raw = deepline_execute(discovery_tool_id, discovery_payload or {})
+            else:
+                discovery_raw = deepline_execute("exa_research", {
+                    "instructions": (
+                        f"Find {seed_target} real companies/accounts matching this GTM ICP: {criteria}. "
+                        "Return JSON only as an array of objects. Each object should include "
+                        "company_name, domain, description, industry, location, headcount, and evidence_url "
+                        "when available. Do not include markdown."
+                    ),
+                    "model": "exa-research-fast",
+                })
+        except Exception as e:
+            return {
+                "job_status": "discovery_error",
+                "plan_path": str(plan_path),
+                "error": f"Seed discovery failed: {e}",
+                "next_step": "Inspect the criteria or pass seed_rows from a known provider/search result.",
+            }
+        seed_rows = _coerce_seed_rows(discovery_raw)
+    else:
+        seed_rows = _coerce_seed_rows(seed_rows)
+
+    if not seed_rows:
+        raw_path = work / "seed_discovery_raw.json"
+        raw_path.write_text(json.dumps(discovery_raw, indent=2, default=str) + "\n")
+        return {
+            "job_status": "needs_seed_rows",
+            "plan_path": str(plan_path),
+            "raw_discovery_path": str(raw_path),
+            "error": (
+                "Could not parse seed rows from discovery output. Try a more structured "
+                "provider search or pass seed_rows from a known source."
+            ),
+            "next_step": "Create/pass seed_rows, then rerun build_prospect_list_job.",
+        }
+
+    if not using_existing_seed_csv:
+        seed_rows = seed_rows[:seed_target]
+    if persona:
+        for row in seed_rows:
+            row.setdefault("persona", persona)
+
+    if not seed_csv:
+        seed_csv = work / "seed_companies.csv"
+        _write_csv(
+            seed_csv,
+            seed_rows,
+            fieldnames=[
+                "company_name",
+                "domain",
+                "persona",
+                "description",
+                "industry",
+                "location",
+                "headcount",
+                "evidence_url",
+            ],
+        )
+    seed_summary = _csv_summary(seed_csv)
+
+    if not persona and not enrichment_columns:
+        return {
+            "job_status": "seed_ready",
+            "plan_path": str(plan_path),
+            "seed_csv": str(seed_csv),
+            "seed_summary": seed_summary,
+            "target_count": target_count,
+            "seed_target": seed_target,
+            "next_step": (
+                "Review the seed CSV, then provide persona or enrichment_columns "
+                "to run row-level enrichment."
+            ),
+        }
+
+    columns = enrichment_columns or [
+        {
+            "alias": "contacts",
+            "tool": "exa_people_search",
+            "payload": {
+                "query": f"{persona} at {{{{company_name}}}}",
+                "numResults": 3,
+            },
+        }
+    ]
+
+    if run_full and using_existing_seed_csv:
+        pilot = {
+            "skipped": True,
+            "reason": "run_full=True with an existing seed_csv_path; using the approved seed CSV.",
+        }
+    else:
+        pilot = batch_enrich(
+            input_csv=str(seed_csv),
+            columns=columns,
+            output_dir=str(work / "pilot"),
+            rows="0:1",
+            full_run=False,
+        )
+    result: dict[str, Any] = {
+        "job_status": "pilot_ready",
+        "plan_path": str(plan_path),
+        "seed_csv": str(seed_csv),
+        "seed_summary": seed_summary,
+        "pilot": pilot,
+        "target_count": target_count,
+        "seed_target": seed_target,
+        "next_step": (
+            "Review the pilot output. If it matches the desired shape, call this tool again "
+            f"with seed_csv_path={str(seed_csv)!r} and run_full=True after explicit approval."
+        ),
+    }
+
+    if isinstance(pilot, dict) and pilot.get("error"):
+        result.update({
+            "job_status": "pilot_error",
+            "next_step": "Fix the pilot error before running the full enrichment.",
+        })
+        return result
+
+    if run_full and not using_existing_seed_csv:
+        result.update({
+            "job_status": "approval_required",
+            "next_step": (
+                "Pilot complete. Review the pilot output, then rerun with "
+                f"seed_csv_path={str(seed_csv)!r} and run_full=True after explicit approval."
+            ),
+        })
+        return result
+
+    if not run_full:
+        return result
+
+    full = batch_enrich(
+        input_csv=str(seed_csv),
+        columns=columns,
+        output_dir=str(work),
+        full_run=True,
+    )
+    if full.get("error"):
+        result.update({
+            "job_status": "full_error",
+            "full_run": full,
+            "output_csv": None,
+            "output_summary": {},
+            "next_step": "Fix the full-run error, then rerun with the same seed_csv_path.",
+        })
+        return result
+
+    output_value = full.get("output_csv")
+    output_csv = Path(output_value) if output_value else None
+    result.update({
+        "job_status": "complete",
+        "full_run": full,
+        "output_csv": str(output_csv) if output_csv else None,
+        "output_summary": _csv_summary(output_csv) if output_csv else {},
+        "next_step": "Deliver the output CSV and summarize coverage, gaps, and sources.",
+    })
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import ExitStack
 import json
 import logging
 import os
 import re
+from types import SimpleNamespace
 import sys
 import time
 from dataclasses import dataclass, field
@@ -148,6 +150,7 @@ async def run_agent_direct(
     from deepline_gtm_agent.dynamic_tools import load_tool_catalog
     from deepline_gtm_agent import create_gtm_agent
     import deepline_gtm_agent.deepline as dl_module
+    import deepline_gtm_agent.tools as tools_module
 
     original_execute = dl_module.deepline_execute
 
@@ -179,8 +182,26 @@ async def run_agent_direct(
         ))
         return result
 
-    with patch.object(dl_module, "deepline_execute", tracking_execute):
-        catalog = load_tool_catalog()
+    def fake_subprocess_run(cmd, capture_output=True, text=True, timeout=None):
+        if cmd[:2] == ["deepline", "enrich"]:
+            output_path = Path(cmd[cmd.index("--output") + 1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text("company_name,contacts\nAcme AI,Jane Doe\n")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"mock": True}), stderr="")
+        if cmd[:3] == ["deepline", "csv", "show"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"row_count": 1, "columns": ["company_name", "contacts"]}),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(dl_module, "deepline_execute", tracking_execute))
+        stack.enter_context(patch.object(tools_module, "deepline_execute", tracking_execute))
+        if mock_api:
+            stack.enter_context(patch.object(tools_module.subprocess, "run", fake_subprocess_run))
+        catalog = [] if mock_api else load_tool_catalog()
         model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
         agent = create_gtm_agent(model=model, tool_catalog=catalog)
         result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
@@ -233,6 +254,19 @@ def _mock_response(operation: str, payload: dict) -> dict:
         return {"email": "john@example.com", "status": "valid", "email_status": "valid"}
     if "crustdata" in operation or "apollo" in operation or "dropleads" in operation:
         return {"leads": [{"fullName": "John Doe", "title": "VP Sales", "companyName": "Acme", "linkedinUrl": "https://linkedin.com/in/johndoe"}], "total": 1}
+    if operation == "exa_research" and "Return JSON only" in str(payload.get("instructions", "")):
+        return {
+            "data": {
+                "output": json.dumps([
+                    {
+                        "company_name": "Acme AI",
+                        "domain": "acme.ai",
+                        "industry": "AI infrastructure",
+                        "evidence_url": "https://example.com/acme",
+                    }
+                ])
+            }
+        }
     if "exa" in operation or "research" in operation or "firecrawl" in operation:
         return {"output": "This is a mock research result about the topic.", "data": {"output": "Mock result"}}
     if "phone" in operation:
@@ -701,9 +735,9 @@ async def main() -> int:
     ], indent=2))
     print(f"  Results written to {output_path}")
 
-    # Exit 1 if any eval has ALL non-skipped expectations failed (total > 0 and passed == 0)
-    fully_failed = [r for r in all_results if r.total > 0 and r.passed == 0]
-    return 1 if fully_failed else 0
+    # Exit 1 on any runtime error or failed non-skipped expectation.
+    failed = [r for r in all_results if r.error or (r.total > 0 and r.passed < r.total)]
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
