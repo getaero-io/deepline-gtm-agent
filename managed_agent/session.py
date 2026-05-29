@@ -24,7 +24,7 @@ DEEPLINE_BIN = Path(os.environ.get("DEEPLINE_BIN", shutil.which("deepline") or "
 DEEPLINE_AUTH = Path(
     os.environ.get("DEEPLINE_AUTH", Path.home() / ".local/deepline/code-deepline-com/.env")
 )
-GTM_SKILL_DIR = Path(os.environ.get("GTM_SKILL_DIR", Path.home() / ".claude/skills/gtm-meta-skill"))
+GTM_SKILL_DIR = Path(os.environ.get("GTM_SKILL_DIR", Path.home() / ".claude/skills/deepline-gtm"))
 
 
 # Bootstrap: install CLI + auth + fix the container's DNS/proxy issue so
@@ -85,40 +85,46 @@ BOOTSTRAP_MSG = (
 _DOC_SUFFIXES = {".md", ".json", ".py", ".csv", ".txt", ".mjs"}
 
 # --- Skill docs CDN (same source as LangGraph version) ---
-SKILLS_BASE = "https://code.deepline.com/.well-known/skills/gtm-meta-skill"
+SKILLS_BASE = "https://code.deepline.com/.well-known/skills/deepline-gtm"
 CORE_SKILL_DOCS = [
     "SKILL.md",
+    "agents/execution-plan-creator.md",
+    "agents/list-builder.md",
     "finding-companies-and-contacts.md",
     "enriching-and-researching.md",
     "writing-outreach.md",
-    "recipes/build-tam.md",
-    "recipes/linkedin-url-lookup.md",
-    "recipes/portfolio-prospecting.md",
+    "provider-playbooks/hubspot.md",
+    "provider-playbooks/salesforce.md",
+    "provider-playbooks/attio.md",
     "provider-playbooks/apollo.md",
     "provider-playbooks/crustdata.md",
-    "provider-playbooks/dropleads.md",
     "provider-playbooks/hunter.md",
-    "provider-playbooks/leadmagic.md",
-    "provider-playbooks/deepline_native.md",
-    "provider-playbooks/lemlist.md",
+    "provider-playbooks/dropleads.md",
     "provider-playbooks/instantly.md",
+    "provider-playbooks/lemlist.md",
     "provider-playbooks/smartlead.md",
     "provider-playbooks/heyreach.md",
     "provider-playbooks/zerobounce.md",
     "provider-playbooks/exa.md",
     "provider-playbooks/firecrawl.md",
+    "provider-playbooks/fullenrich.md",
     "provider-playbooks/apify.md",
-    "provider-playbooks/forager.md",
+    "provider-playbooks/leadmagic.md",
+    "provider-playbooks/peopledatalabs.md",
     "provider-playbooks/icypeas.md",
     "provider-playbooks/prospeo.md",
-    "provider-playbooks/peopledatalabs.md",
-    "provider-playbooks/ai_ark.md",
-    "provider-playbooks/attio.md",
-    "provider-playbooks/hubspot.md",
-    "provider-playbooks/salesforce.md",
+    "provider-playbooks/forager.md",
+    "provider-playbooks/deepline_native.md",
+    "provider-playbooks/adyntel.md",
+    "provider-playbooks/builtwith.md",
     "provider-playbooks/serper.md",
     "provider-playbooks/parallel.md",
     "provider-playbooks/deeplineagent.md",
+    "provider-playbooks/ai_ark.md",
+    "provider-playbooks/cloudflare.md",
+    "recipes/build-tam.md",
+    "recipes/linkedin-url-lookup.md",
+    "recipes/portfolio-prospecting.md",
 ]
 
 # Cache: fetched once at server startup, reused across sessions.
@@ -205,7 +211,7 @@ def _upload_resources(client: anthropic.Anthropic) -> list[dict]:
                     resources.append({
                         "type": "file",
                         "file_id": fid,
-                        "mount_path": f"/workspace/gtm-meta-skill/{rel}",
+                        "mount_path": f"/workspace/deepline-gtm/{rel}",
                     })
                     skill_count += 1
                 except Exception as e:
@@ -222,7 +228,7 @@ def _upload_resources(client: anthropic.Anthropic) -> list[dict]:
                 resources.append({
                     "type": "file",
                     "file_id": fid,
-                    "mount_path": f"/workspace/gtm-meta-skill/{path}",
+                    "mount_path": f"/workspace/deepline-gtm/{path}",
                 })
                 skill_count += 1
             except Exception as e:

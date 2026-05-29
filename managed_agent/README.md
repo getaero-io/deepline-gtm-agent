@@ -56,7 +56,7 @@ docker run -p 8000:8000 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -v ~/.local/bin/deepline:/usr/local/bin/deepline \
   -v ~/.local/deepline:/root/.local/deepline \
-  -v ~/.claude/skills/gtm-meta-skill:/app/gtm-meta-skill \
+  -v ~/.claude/skills/deepline-gtm:/app/deepline-gtm \
   deepline-managed-agent
 ```
 

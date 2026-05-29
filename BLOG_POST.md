@@ -33,7 +33,7 @@ This meant zero custom tool definitions. The agent just runs `deepline tools exe
 We host skill docs on a CDN and fetch them at session startup. The agent gets ~300KB of context about how to use each provider, common patterns, and exact tool IDs. This eliminated most hallucination about tool names and parameters.
 
 ```
-SKILLS_BASE = "https://code.deepline.com/.well-known/skills/gtm-meta-skill"
+SKILLS_BASE = "https://code.deepline.com/.well-known/skills/deepline-gtm"
 CORE_SKILL_DOCS = [
     "SKILL.md",
     "finding-companies-and-contacts.md",

@@ -182,7 +182,7 @@ Always pass `--json` for structured output.
 
 ## GTM skill docs (read before executing)
 
-Mounted at `/mnt/session/uploads/workspace/gtm-meta-skill/`:
+Mounted at `/mnt/session/uploads/workspace/deepline-gtm/`:
 - `SKILL.md` — routing layer, read FIRST for any GTM task
 - `finding-companies-and-contacts.md` — prospecting, filter schemas, parallel patterns
 - `enriching-and-researching.md` — enrich syntax, waterfall patterns, coalescing
