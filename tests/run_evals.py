@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import ExitStack
+from unittest.mock import patch
 import json
 import logging
 import os
 import re
+from types import SimpleNamespace
 import sys
 import time
 from dataclasses import dataclass, field
@@ -137,30 +140,103 @@ async def run_agent_direct(
     mock_api: bool = False,
     verbose: bool = False,
 ) -> tuple[str, list[ToolCallRecord]]:
-    """Invoke Deepline's native v2 agent stream and return (reply, [])."""
-    if mock_api:
-        reply = "Mock native Deepline v2 response. Tool routing is skipped in native eval mode."
-        calls = []
-    else:
-        from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
+    """
+    Invoke the GTM agent directly via Python and return (reply, tool_calls).
 
-        parts: list[str] = []
-        calls = []
-        async for chunk in DeeplineV2Client().stream_agent(
-            {
-                "prompt": prompt,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_mode": "stream",
-            }
-        ):
-            parts.append(extract_text_from_stream_chunk(chunk))
-            calls.extend(_tool_calls_from_native_stream_chunk(chunk))
-        reply = "".join(parts)
+    Extracts tool calls from LangGraph message history (reliable) and patches
+    deepline_execute to record Deepline API sub-calls (for tool_id tracking).
+    """
+    from deepline_gtm_agent.dynamic_tools import load_tool_catalog
+    from deepline_gtm_agent import create_gtm_agent
+    import deepline_gtm_agent.deepline as dl_module
+    import deepline_gtm_agent.tools as tools_module
+
+    original_execute = dl_module.deepline_execute
+
+    def tracking_execute(operation: str, payload: dict) -> dict:
+        if mock_api:
+            result = _mock_response(operation, payload)
+            capture.calls.append(ToolCallRecord(
+                tool_name="deepline_call",
+                tool_id=operation,
+                payload_keys=list(payload.keys()),
+                result_keys=list(result.keys()),
+            ))
+            return result
+        try:
+            result = original_execute(operation, payload)
+        except Exception as e:
+            capture.calls.append(ToolCallRecord(
+                tool_name="deepline_call",
+                tool_id=operation,
+                payload_keys=list(payload.keys()),
+                error=str(e),
+            ))
+            raise
+        capture.calls.append(ToolCallRecord(
+            tool_name="deepline_call",
+            tool_id=operation,
+            payload_keys=list(payload.keys()),
+            result_keys=list(result.keys()) if isinstance(result, dict) else [],
+        ))
+        return result
+
+    def fake_subprocess_run(cmd, capture_output=True, text=True, timeout=None):
+        if cmd[:2] == ["deepline", "enrich"]:
+            output_path = Path(cmd[cmd.index("--output") + 1])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text("company_name,contacts\nAcme AI,Jane Doe\n")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"mock": True}), stderr="")
+        if cmd[:3] == ["deepline", "csv", "show"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"row_count": 1, "columns": ["company_name", "contacts"]}),
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(dl_module, "deepline_execute", tracking_execute))
+        stack.enter_context(patch.object(tools_module, "deepline_execute", tracking_execute))
+        if mock_api:
+            stack.enter_context(patch.object(tools_module.subprocess, "run", fake_subprocess_run))
+        catalog = [] if mock_api else load_tool_catalog()
+        model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
+        agent = create_gtm_agent(model=model, tool_catalog=catalog)
+        result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
+
+    # ── Extract tool calls from LangGraph message history ─────────────────────
+    # LangChain records every AIMessage.tool_calls in the state, giving us
+    # authoritative tool names regardless of how functions are imported.
+    for msg in result["messages"]:
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            for tc in tool_calls:
+                name = tc.get("name", "")
+                args = tc.get("args", {})
+                if name == "deepline_call":
+                    # Already tracked via tracking_execute; skip to avoid duplication
+                    continue
+                capture.calls.insert(0, ToolCallRecord(
+                    tool_name=name,
+                    payload_keys=list(args.keys()),
+                ))
+
+    last = result["messages"][-1]
+    content = last.content
+    if isinstance(content, list):
+        reply = "".join(
+            block["text"] if isinstance(block, dict) else str(block)
+            for block in content
+            if not isinstance(block, dict) or block.get("type") == "text"
+        )
+    else:
+        reply = str(content)
 
     if verbose:
         print(f"\n  Reply: {reply[:300]}")
 
-    return reply, calls
+    return reply, capture.calls
 
 
 def _tool_calls_from_native_stream_chunk(chunk: str) -> list[ToolCallRecord]:
@@ -206,6 +282,19 @@ def _mock_response(operation: str, payload: dict) -> dict:
         return {"email": "john@example.com", "status": "valid", "email_status": "valid"}
     if "crustdata" in operation or "apollo" in operation or "dropleads" in operation:
         return {"leads": [{"fullName": "John Doe", "title": "VP Sales", "companyName": "Acme", "linkedinUrl": "https://linkedin.com/in/johndoe"}], "total": 1}
+    if operation == "exa_research" and "Return JSON only" in str(payload.get("instructions", "")):
+        return {
+            "data": {
+                "output": json.dumps([
+                    {
+                        "company_name": "Acme AI",
+                        "domain": "acme.ai",
+                        "industry": "AI infrastructure",
+                        "evidence_url": "https://example.com/acme",
+                    }
+                ])
+            }
+        }
     if "exa" in operation or "research" in operation or "firecrawl" in operation:
         return {"output": "This is a mock research result about the topic.", "data": {"output": "Mock result"}}
     if "phone" in operation:
@@ -675,7 +764,7 @@ async def main() -> int:
     ], indent=2))
     print(f"  Results written to {output_path}")
 
-    # Exit 1 if any non-skipped expectation failed.
+    # Exit 1 on any runtime error or failed non-skipped expectation.
     failed = [r for r in all_results if r.error or (r.total > 0 and r.passed < r.total)]
     return 1 if failed else 0
 

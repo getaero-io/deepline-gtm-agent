@@ -13,6 +13,7 @@ from deepline_gtm_agent.icp import DEEPLINE_ICP_CONTEXT
 from deepline_gtm_agent.skills import load_skill_docs
 from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
 from deepline_gtm_agent.tools import (
+    build_prospect_list_job,
     batch_enrich,
     enrich_person,
     waterfall_enrich,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 # These are the primary interface for common GTM operations.
 # batch_enrich is the correct interface for any CSV / list work (5+ records).
 GTM_HIGH_LEVEL_TOOLS: list[Callable] = [
+    build_prospect_list_job,  # PRIMARY for durable bulk prospect/list jobs
     batch_enrich,       # PRIMARY for CSV/list work (5+ records) — uses deepline enrich subprocess
     waterfall_enrich,   # single-record email waterfall
     enrich_person,      # single-record person enrichment
@@ -63,7 +65,8 @@ def create_gtm_agent(
     Create a GTM agent powered by Deepline + Deep Agents.
 
     The agent has access to:
-    - 8 high-level GTM tools (waterfall enrichment, prospect search, company research, etc.)
+    - High-level GTM tools (durable prospect jobs, waterfall enrichment,
+      prospect search, company research, etc.)
     - `deepline_call`: a passthrough to all 438+ Deepline integrations (HubSpot, Salesforce,
       Attio, Instantly, Lemlist, Smartlead, HeyReach, Apollo, Crustdata, Firecrawl, Apify, …)
 
