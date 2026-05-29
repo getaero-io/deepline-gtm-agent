@@ -41,59 +41,23 @@ def create_session(
     title: str = "Deepline GTM",
     extra_resources: list[dict] | None = None,
 ) -> str:
+    """Create a new Managed Agent session and return its session_id."""
     config = _load_config()
-    safe_title = title.replace("`", "").replace("\n", " ")[:80] or "Deepline GTM"
+    resources = list(extra_resources or [])
     session = client.beta.sessions.create(
-        agent=config["agent_id"],
+        agent_id=config["agent_id"],
         environment_id=config["environment_id"],
-        title=safe_title,
-        resources=extra_resources or [],
+        display_name=title,
+        resources=resources,
     )
     return session.id
 
 
-def send_message(client: anthropic.Anthropic, session_id: str, text: str) -> None:
-    client.beta.sessions.events.send(
-        session_id=session_id,
-        events=[{"type": "user.message", "content": [{"type": "text", "text": text}]}],
-    )
-
-
-def _parse_event(event) -> dict | None:
-    etype = getattr(event, "type", None)
-    if etype == "agent.message":
-        for block in getattr(event, "content", []):
-            if getattr(block, "type", None) == "text":
-                return {"type": "text", "text": block.text}
-    if etype == "agent.tool_use":
-        return {"type": "tool", "name": getattr(event, "name", "?")}
-    if etype == "session.status_idle":
-        stop_reason = getattr(event, "stop_reason", None)
-        stop_type = getattr(stop_reason, "type", None) if stop_reason else None
-        if stop_type == "requires_action":
-            return None
-        return {"type": "done", "reason": stop_type or "idle"}
-    if etype == "session.status_terminated":
-        return {"type": "done", "reason": "terminated"}
-    return None
-
-
-def stream_events(client: anthropic.Anthropic, session_id: str) -> Iterator[dict]:
-    with client.beta.sessions.events.stream(session_id=session_id) as stream:
-        for event in stream:
-            parsed = _parse_event(event)
-            if parsed:
-                yield parsed
-                if parsed["type"] == "done":
-                    return
-
-
-def run_prompt(
+def stream_events(
     client: anthropic.Anthropic,
-    prompt: str,
-    bootstrap: bool = False,
-    title: str | None = None,
-) -> Iterator[dict]:
-    session_id = create_session(client, title=title or prompt[:60])
-    send_message(client, session_id, f"{TASK_PREFIX}{prompt}")
-    yield from stream_events(client, session_id)
+    session_id: str,
+    task: str,
+) -> Iterator[anthropic.types.beta.sessions.SessionStreamEvent]:
+    """Stream events from a session task."""
+    with client.beta.sessions.stream(session_id=session_id, message=TASK_PREFIX + task) as stream:
+        yield from stream

@@ -101,7 +101,9 @@ async def _fetch(url: str) -> str:
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     return resp.text
-                logger.warning("Skill doc returned HTTP %s: %s", resp.status_code, url)
+                logger.warning(
+                    "Skill doc returned HTTP %s: %s", resp.status_code, url
+                )
         except Exception as e:
             if attempt == 2:
                 logger.warning("Failed to fetch skill doc %s: %s", url, e)

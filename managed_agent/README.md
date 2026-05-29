@@ -31,6 +31,26 @@ python server.py
 
 Open `http://localhost:8000` for web chat.
 
+### Docker
+```bash
+docker build -f managed_agent/Dockerfile -t deepline-managed-agent .
+docker run -p 8000:8000 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -v ~/.local/bin/deepline:/usr/local/bin/deepline \
+  -v ~/.local/deepline:/root/.local/deepline \
+  -v ~/.claude/skills/deepline-gtm:/app/deepline-gtm \
+  deepline-managed-agent
+```
+
+## Deploy to Railway
+
+```bash
+railway init
+railway variables set ANTHROPIC_API_KEY=sk-ant-...
+# Copy agent_id and environment_id from .agent_config.json
+railway up --detach
+```
+
 ## API
 
 ### POST /chat
