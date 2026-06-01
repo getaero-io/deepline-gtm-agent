@@ -18,42 +18,48 @@ import httpx
 CONFIG_PATH = Path(__file__).parent / ".agent_config.json"
 SKILL_CONFIG_PATH = Path(__file__).parent / ".skill_config.json"
 
-SKILLS_BASE = "https://code.deepline.com/.well-known/skills/gtm-meta-skill"
+SKILLS_BASE = "https://code.deepline.com/.well-known/skills/deepline-gtm"
 
 # Core skill docs to bundle (same list as session.py)
 CORE_DOCS = [
     "SKILL.md",
+    "agents/execution-plan-creator.md",
+    "agents/list-builder.md",
     "finding-companies-and-contacts.md",
     "enriching-and-researching.md",
     "writing-outreach.md",
-    "recipes/build-tam.md",
-    "recipes/linkedin-url-lookup.md",
-    "recipes/portfolio-prospecting.md",
+    "provider-playbooks/hubspot.md",
+    "provider-playbooks/salesforce.md",
+    "provider-playbooks/attio.md",
     "provider-playbooks/apollo.md",
     "provider-playbooks/crustdata.md",
-    "provider-playbooks/dropleads.md",
     "provider-playbooks/hunter.md",
-    "provider-playbooks/leadmagic.md",
-    "provider-playbooks/deepline_native.md",
-    "provider-playbooks/lemlist.md",
+    "provider-playbooks/dropleads.md",
     "provider-playbooks/instantly.md",
+    "provider-playbooks/lemlist.md",
     "provider-playbooks/smartlead.md",
     "provider-playbooks/heyreach.md",
     "provider-playbooks/zerobounce.md",
     "provider-playbooks/exa.md",
     "provider-playbooks/firecrawl.md",
+    "provider-playbooks/fullenrich.md",
     "provider-playbooks/apify.md",
-    "provider-playbooks/forager.md",
+    "provider-playbooks/leadmagic.md",
+    "provider-playbooks/peopledatalabs.md",
     "provider-playbooks/icypeas.md",
     "provider-playbooks/prospeo.md",
-    "provider-playbooks/peopledatalabs.md",
-    "provider-playbooks/ai_ark.md",
-    "provider-playbooks/attio.md",
-    "provider-playbooks/hubspot.md",
-    "provider-playbooks/salesforce.md",
+    "provider-playbooks/forager.md",
+    "provider-playbooks/deepline_native.md",
+    "provider-playbooks/adyntel.md",
+    "provider-playbooks/builtwith.md",
     "provider-playbooks/serper.md",
     "provider-playbooks/parallel.md",
     "provider-playbooks/deeplineagent.md",
+    "provider-playbooks/ai_ark.md",
+    "provider-playbooks/cloudflare.md",
+    "recipes/build-tam.md",
+    "recipes/linkedin-url-lookup.md",
+    "recipes/portfolio-prospecting.md",
 ]
 
 
