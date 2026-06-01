@@ -1,37 +1,17 @@
-"""
-deepline-gtm-agent: GTM automation agent powered by Deepline + Deep Agents.
+"""Deepline GTM managed-agent broker utilities.
 
-Drop-in GTM agent that combines 30+ enrichment and outreach providers via
-Deepline with the Deep Agents orchestration framework.
-
-Usage:
-    from deepline_gtm_agent import create_gtm_agent
-
-    agent = create_gtm_agent()
-    result = agent.invoke({"messages": [{"role": "user", "content": "..."}]})
+The default v2 runtime is the managed broker plus Deepline's native agent/chat
+API. Legacy LangGraph helpers are imported lazily so installing the broker no
+longer pulls Deep Agents or LangChain onto the default path.
 """
 
-from deepline_gtm_agent.agent import create_gtm_agent
-from deepline_gtm_agent.dynamic_tools import load_tool_catalog, make_deepline_call_tool
-from deepline_gtm_agent.tools import (
-    waterfall_enrich,
-    enrich_person,
-    search_prospects,
-    research_company,
-    verify_email,
-    find_linkedin,
-    search_companies,
-)
+from deepline_gtm_agent.v2_client import DeeplineV2Client
 
-__all__ = [
-    "create_gtm_agent",
-    "load_tool_catalog",
-    "make_deepline_call_tool",
-    "waterfall_enrich",
-    "enrich_person",
-    "search_prospects",
-    "research_company",
-    "verify_email",
-    "find_linkedin",
-    "search_companies",
-]
+__all__ = ["DeeplineV2Client", "create_gtm_agent"]
+
+
+def create_gtm_agent(*args, **kwargs):
+    """Create the deprecated LangGraph GTM agent lazily."""
+    from deepline_gtm_agent.agent import create_gtm_agent as _create_gtm_agent
+
+    return _create_gtm_agent(*args, **kwargs)

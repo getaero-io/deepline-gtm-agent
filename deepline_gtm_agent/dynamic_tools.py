@@ -13,7 +13,6 @@ so subsequent startups are instant.
 import json
 import logging
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -22,7 +21,7 @@ import httpx
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from deepline_gtm_agent.deepline import deepline_execute, DEEPLINE_API_BASE
+from deepline_gtm_agent.deepline import DEEPLINE_API_BASE, deepline_execute
 
 logger = logging.getLogger(__name__)
 
@@ -59,37 +58,21 @@ def _save_catalog_cache(tools: list[dict]) -> None:
         logger.warning("Could not cache tool catalog: %s", e)
 
 
-def _fetch_catalog_from_cli() -> list[dict]:
-    """Run `deepline tools list --json` and return the tools list."""
-    try:
-        result = subprocess.run(
-            ["deepline", "tools", "list", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return data.get("tools", data.get("integrations", []))
-    except Exception as e:
-        logger.warning("deepline tools list --json failed: %s", e)
-    return []
-
-
 def _fetch_catalog_from_api() -> list[dict]:
-    """Try to fetch the catalog via the Deepline HTTP API."""
+    """Fetch the catalog via Deepline's SDK-facing v2 HTTP API."""
     api_key = os.environ.get("DEEPLINE_API_KEY", "")
     if not api_key:
         return []
     try:
         with httpx.Client(timeout=20) as client:
             resp = client.get(
-                f"{DEEPLINE_API_BASE}/api/v2/integrations/list",
+                f"{DEEPLINE_API_BASE}/api/v2/tools",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
         if resp.status_code == 200:
             data = resp.json()
-            return data.get("tools", data.get("integrations", []))
+            tools = data.get("tools", data)
+            return tools if isinstance(tools, list) else []
     except Exception as e:
         logger.warning("Deepline API catalog fetch failed: %s", e)
     return []
@@ -101,8 +84,7 @@ def load_tool_catalog(force_refresh: bool = False) -> list[dict]:
 
     Order of preference:
     1. Disk cache (if fresh and not force_refresh)
-    2. Deepline HTTP API (if DEEPLINE_API_KEY is set)
-    3. deepline CLI subprocess
+    2. Deepline v2 HTTP API (if DEEPLINE_API_KEY is set)
     """
     if not force_refresh:
         cached = _load_catalog_cache()
@@ -110,7 +92,7 @@ def load_tool_catalog(force_refresh: bool = False) -> list[dict]:
             logger.info("Loaded %d Deepline tools from disk cache", len(cached))
             return cached
 
-    tools = _fetch_catalog_from_api() or _fetch_catalog_from_cli()
+    tools = _fetch_catalog_from_api()
     tools = [t for t in tools if t.get("toolId") not in _SKIP_TOOL_IDS]
 
     if tools:
