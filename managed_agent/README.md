@@ -1,77 +1,40 @@
-# Deepline GTM Agent — Managed Agent Edition
+# Deepline GTM Agent
 
-Runs the Deepline GTM agent entirely inside [Anthropic Managed Agents](https://platform.claude.com/docs/en/managed-agents/overview). No LangGraph, no local tool execution. The `deepline` CLI + auth + skill docs are uploaded into each session's sandbox.
+FastAPI broker for Deepline v2 native agent/chat. It exposes REST, streaming, web chat, and Slack endpoints while Deepline handles GTM tool routing through the v2 SDK/API.
 
-## How it works
+## How It Works
 
 ```
-You (Slack / REST / Web UI)
-  │
-  ▼
-FastAPI server (this code)
-  │
-  ├─ creates Managed Agent session via Anthropic API
-  ├─ uploads: deepline binary + auth + skill docs
-  ├─ sends your message
-  └─ streams events back to you
-       │
-       ▼
-  Anthropic sandbox container
-    ├─ deepline CLI installed + authenticated
-    ├─ bash, read, write, edit, glob, grep, web_fetch, web_search
-    └─ full access to code.deepline.com (441+ tools)
+Slack / REST / Web UI
+  |
+  v
+FastAPI broker
+  |
+  v
+Deepline v2 agent/chat + SDK/API
+  |
+  v
+Deepline integrations and provider workflows
 ```
+
+Configure the broker with environment variables. Managed sessions should not depend on local Deepline CLI state.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 
-# One-time: create the agent + environment on Anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
-python setup.py
-```
+export DEEPLINE_API_KEY=dlp_...
 
-This creates `.agent_config.json` with your `agent_id` and `environment_id`.
-
-## Run
-
-### CLI
-```bash
-python cli.py "find 10 Series B fintech companies hiring GTM engineers"
-python cli.py --eval email-waterfall
-```
-
-### Server (REST + Slack + Web UI)
-```bash
 python server.py
-# Visit http://localhost:8000 for web chat
-# POST /chat or /chat/stream for API access
 ```
 
-### Docker
-```bash
-docker build -f managed_agent/Dockerfile -t deepline-managed-agent .
-docker run -p 8000:8000 \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -v ~/.local/bin/deepline:/usr/local/bin/deepline \
-  -v ~/.local/deepline:/root/.local/deepline \
-  -v ~/.claude/skills/gtm-meta-skill:/app/gtm-meta-skill \
-  deepline-managed-agent
-```
-
-## Deploy to Railway
-
-```bash
-railway init
-railway variables set ANTHROPIC_API_KEY=sk-ant-...
-# Copy agent_id and environment_id from .agent_config.json
-railway up --detach
-```
+Open `http://localhost:8000` for web chat.
 
 ## API
 
 ### POST /chat
+
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
@@ -79,30 +42,38 @@ curl -X POST http://localhost:8000/chat \
 ```
 
 ### POST /chat/stream
+
 ```bash
 curl -N -X POST http://localhost:8000/chat/stream \
   -H "Content-Type: application/json" \
-  -d '{"message": "enrich leads.csv with work emails"}'
+  -d '{"message": "research stripe.com"}'
 ```
 
-### Slack
-Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`, then DM the bot or @mention it.
+Set `API_KEY` to require `Authorization: Bearer <API_KEY>` on chat endpoints.
 
-## Access patterns
+## Docker
 
-| Interface | Best for | How |
-|-----------|----------|-----|
-| **Slack** | GTM teams, async enrichment | @mention bot or DM |
-| **Web UI** | Exploration, CSV workflows | Visit `/` on your server |
-| **REST API** | Programmatic access, cron | POST to `/chat` or `/chat/stream` |
-| **CLI** | Evals, developer use | `python cli.py "..."` |
+```bash
+docker build -f managed_agent/Dockerfile -t deepline-gtm-agent .
+docker run -p 8000:8000 \
+  -e DEEPLINE_API_KEY=dlp_... \
+  deepline-gtm-agent
+```
 
-## vs. LangGraph edition
+## Railway
 
-| | LangGraph (`/`) | Managed Agent (`/managed_agent`) |
-|---|---|---|
-| Agent loop | Your server (LangGraph) | Anthropic's infrastructure |
-| Tool execution | Your server (Python) | Anthropic sandbox (bash) |
-| Deepline access | HTTP client in-process | `deepline` CLI in sandbox |
-| Scaling | You manage | Anthropic manages |
-| Customization | Full control | System prompt + tools |
+```bash
+railway init
+railway variables set \
+  DEEPLINE_API_KEY=dlp_... \
+  PORT=8000
+railway up --detach
+```
+
+For Slack, also set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`.
+
+`ANTHROPIC_API_KEY`, `MANAGED_AGENT_ID`, and `MANAGED_ENVIRONMENT_ID` are optional and only used by `setup.py` / `session.py` for manual Anthropic Managed Agent experiments. The default broker path does not require them.
+
+## Environment
+
+See [env.example](env.example) for all supported variables.

@@ -30,7 +30,7 @@ header span{font-size:12px;color:#666;background:#1a1a1a;padding:2px 8px;border-
 <body>
 <header>
   <h1>Deepline GTM Agent</h1>
-  <span>Managed Agent</span>
+  <span>Native v2</span>
 </header>
 <div class="templates">
   <button onclick="fill('Find 10 Series B fintech companies hiring for GTM engineers')">Prospecting</button>
@@ -65,8 +65,9 @@ async function send(){
         const raw=line.slice(6);if(raw==='[DONE]')continue;
         try{
           const evt=JSON.parse(raw);
-          if(evt.type==='text')agentEl.textContent+=evt.text;
-          else if(evt.type==='tool')addMsg('$ '+(evt.command||evt.name).slice(0,200),'tool');
+          const textDelta=evt.text||evt.textDelta||evt.delta||(evt.part&&(evt.part.text||evt.part.textDelta))||'';
+          if(textDelta)agentEl.textContent+=textDelta;
+          else if(evt.type==='tool'||evt.type==='tool-call')addMsg('$ '+(evt.command||evt.name||evt.toolName||'tool').slice(0,200),'tool');
           else if(evt.session_id)messages.querySelector('.status').textContent='Session: '+evt.session_id;
         }catch{}
       }

@@ -1,39 +1,34 @@
-"""
-FastAPI server — Deepline GTM Managed Agent
+"""FastAPI broker for Deepline GTM native v2 chat.
 
-Bridges Slack, REST, and Web UI to Anthropic Managed Agent sessions.
-Each request spins up a fresh sandbox with the deepline CLI pre-loaded.
-
-Endpoints:
-  GET  /health          - health check
-  GET  /                - web chat UI
-  POST /chat            - single-turn, full response
-  POST /chat/stream     - streaming SSE
-  POST /slack/events    - Slack Events API webhook
-  GET  /slack/oauth_redirect - Slack OAuth callback
+The broker keeps transport concerns here: REST, web chat, Slack verification,
+Slack formatting, and optional bearer auth. Deepline owns the agent runtime,
+tool execution, provider credentials, billing, and streaming contract.
 """
 
-import asyncio
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
 import logging
 import os
+import sys
 import time
+from collections import OrderedDict
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any
 
-import re
-
-import anthropic
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from session import create_session, send_message, stream_events, BOOTSTRAP_MSG
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
+from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,63 +42,86 @@ async def require_api_key(credentials: HTTPAuthorizationCredentials = Depends(_b
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
-def get_client() -> anthropic.Anthropic:
-    return anthropic.Anthropic()
+def get_deepline_client() -> DeeplineV2Client:
+    return DeeplineV2Client()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Deepline GTM Managed Agent server starting")
-    # Pre-fetch skill docs from CDN so they're cached for all sessions
-    from session import fetch_skill_docs_from_cdn
-    docs = fetch_skill_docs_from_cdn()
-    logger.info("Pre-fetched %d skill docs from CDN", len(docs))
+    logger.info("Deepline GTM native v2 broker starting")
     yield
 
 
-app = FastAPI(title="Deepline GTM Managed Agent", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Deepline GTM Native Agent", version="2.0.0", lifespan=lifespan)
 
 _cors_raw = os.environ.get("CORS_ORIGINS", "*")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_raw.split(",")],
+    allow_origins=[o.strip() for o in _cors_raw.split(",") if o.strip()],
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
+class ChatMessage(BaseModel):
+    role: str
+    content: str
 
 
 class ChatRequest(BaseModel):
     message: str
-    bootstrap: bool = True
+    messages: list[ChatMessage] | None = None
+    thread_id: str | None = None
+    enabled_tool_ids: list[str] | None = Field(default=None, alias="enabledToolIds")
+    max_tool_calls: int | None = Field(default=None, alias="maxToolCalls")
+    model: str | None = None
+
+    model_config = {"populate_by_name": True}
 
 
 class ChatResponse(BaseModel):
     reply: str
-    session_id: str
+    thread_id: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+def _chat_payload(req: ChatRequest) -> dict[str, Any]:
+    messages = (
+        [{"role": m.role, "content": m.content} for m in req.messages]
+        if req.messages
+        else [{"role": "user", "content": req.message}]
+    )
+    payload: dict[str, Any] = {
+        "prompt": req.message,
+        "messages": messages,
+        "response_mode": "stream",
+    }
+    if req.enabled_tool_ids is not None:
+        payload["enabledToolIds"] = req.enabled_tool_ids
+    if req.max_tool_calls is not None:
+        payload["maxToolCalls"] = req.max_tool_calls
+    if req.model:
+        payload["model"] = req.model
+    return payload
+
+
+async def _collect_native_reply(payload: dict[str, Any]) -> str:
+    client = get_deepline_client()
+    parts: list[str] = []
+    async for chunk in client.stream_agent(payload):
+        parts.append(extract_text_from_stream_chunk(chunk))
+    return "".join(parts).strip()
 
 
 @app.get("/health")
 async def health():
-    config_ok = bool(os.environ.get("MANAGED_AGENT_ID") and os.environ.get("MANAGED_ENVIRONMENT_ID"))
-    if not config_ok:
-        from session import CONFIG_PATH
-        config_ok = CONFIG_PATH.exists()
-    return {
-        "status": "ok" if config_ok else "needs setup",
-        "agent": "deepline-gtm-managed-agent",
-        "config": "loaded" if config_ok else "set MANAGED_AGENT_ID + MANAGED_ENVIRONMENT_ID or run setup.py",
+    body = {
+        "status": "ok" if os.environ.get("DEEPLINE_API_KEY") else "needs setup",
+        "agent": "deepline-gtm-native-v2",
+        "deepline": "configured" if os.environ.get("DEEPLINE_API_KEY") else "missing DEEPLINE_API_KEY",
+        "host": os.environ.get("DEEPLINE_HOST_URL") or os.environ.get("DEEPLINE_API_BASE_URL") or "https://code.deepline.com",
         "slack": "configured" if os.environ.get("SLACK_BOT_TOKEN") else "not configured",
     }
+    return JSONResponse(body, status_code=200 if os.environ.get("DEEPLINE_API_KEY") else 503)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -116,46 +134,17 @@ async def chat_ui():
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(req: ChatRequest):
-    client = get_client()
-    loop = asyncio.get_event_loop()
-
-    def _run():
-        session_id = create_session(client, title=req.message[:60])
-        prompt = f"{BOOTSTRAP_MSG}\n\nThen: {req.message}" if req.bootstrap else req.message
-        send_message(client, session_id, prompt)
-
-        parts = []
-        for evt in stream_events(client, session_id):
-            if evt["type"] == "text":
-                parts.append(evt["text"])
-        return "".join(parts), session_id
-
-    reply, session_id = await loop.run_in_executor(None, _run)
-    return ChatResponse(reply=reply, session_id=session_id)
+    reply = await _collect_native_reply(_chat_payload(req))
+    return ChatResponse(reply=reply, thread_id=req.thread_id)
 
 
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 async def chat_stream(req: ChatRequest):
-    client = get_client()
+    payload = _chat_payload(req)
 
     async def generate() -> AsyncIterator[str]:
-        loop = asyncio.get_event_loop()
-
-        session_id = await loop.run_in_executor(
-            None, create_session, client, req.message[:60]
-        )
-        yield f"data: {json.dumps({'session_id': session_id})}\n\n"
-
-        prompt = f"{BOOTSTRAP_MSG}\n\nThen: {req.message}" if req.bootstrap else req.message
-        await loop.run_in_executor(None, send_message, client, session_id, prompt)
-
-        def _stream():
-            return list(stream_events(client, session_id))
-
-        events = await loop.run_in_executor(None, _stream)
-        for evt in events:
-            yield f"data: {json.dumps(evt)}\n\n"
-        yield "data: [DONE]\n\n"
+        async for chunk in get_deepline_client().stream_agent(payload):
+            yield chunk
 
     return StreamingResponse(
         generate(),
@@ -164,27 +153,14 @@ async def chat_stream(req: ChatRequest):
     )
 
 
-# ---------------------------------------------------------------------------
-# Slack
-# ---------------------------------------------------------------------------
-
-# Import unified formatter from main package
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
-
-
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
-
-# Per-workspace tokens populated via OAuth.
 _workspace_tokens: dict[str, str] = {}
 
 
 def _verify_slack_sig(body: bytes, timestamp: str, signature: str) -> bool:
     if not SLACK_SIGNING_SECRET:
-        return True
+        return False
     try:
         ts = int(timestamp)
     except (ValueError, TypeError):
@@ -198,6 +174,7 @@ def _verify_slack_sig(body: bytes, timestamp: str, signature: str) -> bool:
 
 async def _slack_post(channel: str, text: str, token: str, thread_ts: str | None = None):
     import httpx
+
     payload = {"channel": channel, "text": text, "mrkdwn": True}
     if thread_ts:
         payload["thread_ts"] = thread_ts
@@ -212,6 +189,7 @@ async def _slack_post(channel: str, text: str, token: str, thread_ts: str | None
 
 async def _slack_react(channel: str, ts: str, emoji: str, token: str, remove: bool = False):
     import httpx
+
     endpoint = "reactions.remove" if remove else "reactions.add"
     try:
         async with httpx.AsyncClient() as http:
@@ -226,8 +204,8 @@ async def _slack_react(channel: str, ts: str, emoji: str, token: str, remove: bo
 
 
 async def _fetch_thread_history(channel: str, thread_ts: str, token: str, limit: int = 20) -> list[dict]:
-    """Fetch recent messages from a Slack thread for context."""
     import httpx
+
     try:
         async with httpx.AsyncClient() as http:
             resp = await http.get(
@@ -240,22 +218,20 @@ async def _fetch_thread_history(channel: str, thread_ts: str, token: str, limit:
         if not data.get("ok"):
             return []
         messages = []
-        for msg in data.get("messages", [])[:-1]:  # exclude the current message (last)
+        for msg in data.get("messages", [])[:-1]:
             text = msg.get("text", "").strip()
             if text.startswith("<@"):
                 text = text.split(">", 1)[-1].strip()
             if not text:
                 continue
-            role = "assistant" if msg.get("bot_id") else "user"
-            messages.append({"role": role, "content": text})
+            messages.append({"role": "assistant" if msg.get("bot_id") else "user", "content": text})
         return messages
     except Exception as e:
-        logger.warning("Failed to fetch thread history: %s", e)
+        logger.warning("Failed to fetch Slack thread history: %s", e)
         return []
 
 
 async def _handle_slack_event(event: dict, team_id: str):
-    """Process a Slack message via a Managed Agent session."""
     token = _workspace_tokens.get(team_id, SLACK_BOT_TOKEN)
     channel = event.get("channel", "")
     user_text = event.get("text", "").strip()
@@ -266,85 +242,37 @@ async def _handle_slack_event(event: dict, team_id: str):
 
     message_ts = event.get("ts", "")
     thread_ts = event.get("thread_ts") or message_ts
-    user_id = event.get("user", "")
-
-    logger.info("Slack: processing message from %s: %.80s", user_id, user_text)
     await _slack_react(channel, message_ts, "eyes", token)
 
-    # Fetch thread history for context (if this is a reply in a thread)
-    thread_context = ""
-    if event.get("thread_ts"):
-        history = await _fetch_thread_history(channel, thread_ts, token)
-        if history:
-            lines = []
-            for msg in history:
-                prefix = "User" if msg["role"] == "user" else "Agent"
-                lines.append(f"{prefix}: {msg['content']}")
-            thread_context = (
-                "\n\n## Thread context (previous messages in this Slack thread):\n"
-                + "\n\n".join(lines)
-                + "\n\n## Current message:\n"
-            )
-            logger.info("Slack: fetched %d prior messages from thread", len(history))
-
-    session_id = None
     try:
-        client = get_client()
-        loop = asyncio.get_event_loop()
-
-        logger.info("Slack: creating session...")
-        session_id = await loop.run_in_executor(
-            None, create_session, client, f"Slack: {user_text[:50]}"
+        history = await _fetch_thread_history(channel, thread_ts, token) if event.get("thread_ts") else []
+        messages = history + [{"role": "user", "content": user_text}]
+        reply = await _collect_native_reply(
+            {
+                "prompt": user_text,
+                "messages": messages,
+                "response_mode": "stream",
+            }
         )
-        logger.info("Slack: session %s created, sending message", session_id)
-
-        prompt = f"{BOOTSTRAP_MSG}\n\n{thread_context}Then: {user_text}"
-        await loop.run_in_executor(None, send_message, client, session_id, prompt)
-
-        def _collect():
-            parts = []
-            for evt in stream_events(client, session_id):
-                if evt["type"] == "text":
-                    parts.append(evt["text"])
-                elif evt["type"] == "done":
-                    logger.info("Slack: session %s done (%s)", session_id, evt.get("reason"))
-            # The agent emits multiple text blocks. If consecutive blocks don't
-            # end/start with newlines, headers get glued to preceding text
-            # (e.g. "Done.## Title"). Fix by ensuring block boundaries have spacing.
-            merged = "".join(parts)
-            # Insert newline before markdown headers that follow non-whitespace.
-            # Use negative lookbehind to avoid splitting ## into # + #
-            merged = re.sub(r"([^\n#])(#{1,6}\s)", r"\1\n\n\2", merged)
-            return merged
-
-        logger.info("Slack: streaming events for session %s...", session_id)
-        reply = await loop.run_in_executor(None, _collect)
-        logger.info("Slack: got reply (%d chars) for session %s", len(reply or ""), session_id)
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
-
-        # Split long messages using shared utility
         for chunk in truncate_for_slack(slack_reply):
             await _slack_post(channel, chunk, token, thread_ts)
-        logger.info("Slack: reply posted for session %s", session_id)
     except Exception as e:
-        logger.exception("Slack handler error (session=%s)", session_id)
+        logger.exception("Slack handler error")
         try:
             await _slack_react(channel, message_ts, "eyes", token, remove=True)
             await _slack_post(channel, f":warning: Error: {e}", token, thread_ts)
         except Exception:
-            logger.exception("Failed to send error message to Slack")
+            logger.exception("Failed to send Slack error message")
 
 
-# LRU dedup cache (same pattern as main slack module)
-from collections import OrderedDict
 _seen_events: OrderedDict[str, None] = OrderedDict()
 _MAX_SEEN = 5000
 
 
 def _mark_seen(event_id: str) -> bool:
-    """Returns True if duplicate."""
     if event_id in _seen_events:
         return True
     _seen_events[event_id] = None
@@ -377,15 +305,12 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
         etype = event.get("type", "")
         ctype = event.get("channel_type", "")
 
-        if _mark_seen(event_id):
+        if event_id and _mark_seen(event_id):
             return Response(status_code=200)
-
         if event.get("bot_id") or event.get("subtype"):
             return Response(status_code=200)
-
         if etype == "app_mention" or (etype == "message" and ctype == "im"):
-            team_id = payload.get("team_id", "")
-            background_tasks.add_task(_handle_slack_event, event, team_id)
+            background_tasks.add_task(_handle_slack_event, event, payload.get("team_id", ""))
 
     return Response(status_code=200)
 
@@ -393,6 +318,7 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
 @app.get("/slack/oauth_redirect")
 async def slack_oauth_redirect(code: str = "", error: str = ""):
     import httpx
+
     if error:
         return HTMLResponse(f"<h2>OAuth error: {error}</h2>", status_code=400)
     if not code:
@@ -428,4 +354,5 @@ async def slack_oauth_redirect(code: str = "", error: str = ""):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
