@@ -84,14 +84,46 @@ class ChatResponse(BaseModel):
     thread_id: str | None = None
 
 
+BULK_PROSPECT_LIST_INSTRUCTIONS = """\
+Bulk prospect/list requests must use Deepline's native v2 list-building workflow.
+Create an execution plan, produce or reference an auditable seed list, and run only
+a pilot/sample first unless the user has explicitly approved the full run. Do not
+invent prospects, companies, emails, LinkedIn URLs, or CSV rows. If a CSV/artifact
+is requested, return the artifact/status details Deepline produced and the next
+approval step before any full enrichment.
+"""
+
+_BULK_LIST_TERMS = ("csv", "list", "prospect", "prospects", "contacts", "accounts")
+_BULK_ACTION_TERMS = ("build", "create", "find", "source", "generate")
+_BULK_COUNT_TERMS = ("5", "10", "20", "25", "50", "100", "bulk", "batch")
+
+
+def _looks_like_bulk_prospect_list(message: str) -> bool:
+    text = message.lower()
+    return (
+        any(term in text for term in _BULK_LIST_TERMS)
+        and any(term in text for term in _BULK_ACTION_TERMS)
+        and any(term in text for term in _BULK_COUNT_TERMS)
+    )
+
+
+def _with_bulk_prospecting_guidance(message: str) -> str:
+    if not _looks_like_bulk_prospect_list(message):
+        return message
+    if "native v2 list-building workflow" in message:
+        return message
+    return f"{BULK_PROSPECT_LIST_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
 def _chat_payload(req: ChatRequest) -> dict[str, Any]:
+    prompt = _with_bulk_prospecting_guidance(req.message)
     messages = (
         [{"role": m.role, "content": m.content} for m in req.messages]
-        if req.messages
-        else [{"role": "user", "content": req.message}]
+        if req.messages and prompt == req.message
+        else [{"role": "user", "content": prompt}]
     )
     payload: dict[str, Any] = {
-        "prompt": req.message,
+        "prompt": prompt,
         "messages": messages,
         "response_mode": "stream",
     }
