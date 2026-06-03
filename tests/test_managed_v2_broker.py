@@ -56,3 +56,28 @@ def test_slack_signature_fails_closed_without_secret(monkeypatch):
     monkeypatch.setattr(server, "SLACK_SIGNING_SECRET", "")
 
     assert server._verify_slack_sig(b"{}", "1", "v0=fake") is False
+
+
+def test_bulk_prospect_requests_get_native_v2_list_guidance():
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    payload = _chat_payload(
+        ChatRequest(
+            message="Build a CSV prospect list of 20 VP Engineering contacts at AI infrastructure companies."
+        )
+    )
+
+    assert payload["prompt"].startswith("Bulk prospect/list requests")
+    assert "native v2 list-building workflow" in payload["prompt"]
+    assert "pilot/sample first" in payload["messages"][0]["content"]
+    assert payload["messages"][0]["role"] == "user"
+
+
+def test_one_off_prospect_requests_do_not_get_bulk_guidance():
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    payload = _chat_payload(ChatRequest(message="Find the LinkedIn URL for Jensen Huang at NVIDIA."))
+
+    assert payload["prompt"] == "Find the LinkedIn URL for Jensen Huang at NVIDIA."
+    assert payload["messages"][0]["role"] == "user"
+    assert "native v2 list-building workflow" not in payload["messages"][0]["content"]
