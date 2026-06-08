@@ -1,0 +1,168 @@
+version: 2
+name: deepline-hermes-gtm-connectors
+principle: "Deepline is the primary GTM access, execution, logging, and observability layer. Hermes MCPs are optional sidecars for chat, repo files, and approved app-specific actions."
+
+hermes:
+  recommended_commands:
+    - hermes mcp catalog
+    - hermes mcp install <name>
+    - hermes mcp configure <name>
+  trust_policy:
+    - "Prefer Nous-reviewed catalog entries when available."
+    - "Read each manifest source and bootstrap command before installing."
+    - "After install, prune tool exposure with hermes mcp configure."
+    - "Enable parallel tool calls only for read-only tools."
+    - "Do not duplicate Deepline provider access through separate MCPs unless Deepline cannot perform the workflow."
+
+connectors:
+  - id: deepline-native
+    priority: p0
+    install_preference: cli_or_direct_api
+    purpose: "Primary GTM provider access, enrichment, workflow execution, logging, run history, output lineage, spend/usage, and Session UI observability."
+    default_scope: "Jai's approved Deepline workspace only"
+    preferred_for:
+      - provider_search
+      - provider_execution
+      - enrichment_waterfalls
+      - workflow_runs
+      - account_and_contact_research
+      - email_linkedin_phone_resolution
+      - output_csv_lineage
+      - session_plan_status_usage
+    required_practices:
+      - "Post a Deepline Session UI plan before provider, enrichment, or workflow execution."
+      - "Use deepline session status for live progress updates."
+      - "Use deepline session usage when credit/spend/limit state matters."
+      - "Register non-enrich CSV outputs with deepline session output."
+      - "Prefer deepline tools search before selecting providers."
+      - "Prefer deepline enrich for row-level GTM work."
+      - "Use one-row pilots before full runs."
+    forbidden_by_default:
+      - unsupervised_bulk_runs
+      - public_send_or_publish
+      - workspace_switching_without_confirmation
+    rule: "Within customers/deepline or this Hermes pack, always use Jai's Deepline workspace."
+
+  - id: composio
+    priority: p2
+    install_preference: hermes_catalog_or_http_mcp
+    purpose: "Optional scoped OAuth/tool sidecar for SaaS actions Deepline does not own or when a draft/read app action is explicitly needed."
+    remote_url: "https://connect.composio.dev/mcp"
+    default_scope: "read, search, draft, create-draft"
+    forbidden_by_default:
+      - delete
+      - bulk-send
+      - admin
+      - permission-management
+    notes:
+      - "Do not install Composio as a default replacement for Deepline provider access, logging, or workflow execution."
+      - "Use Composio where scoped app actions are safer than browser automation and Deepline is not the right system of record."
+      - "For this local transcripts workspace, existing rules prefer direct scripts for Gmail/Notion/HubSpot. In Hermes/Sprites, use the least-privileged connector available."
+
+  - id: filesystem-scoped
+    priority: p0
+    install_preference: stdio
+    purpose: "Read and write only this repo and approved context/output folders."
+    allowed_paths:
+      - "/home/sprite/deepline-hermes-repo"
+      - "/home/sprite/deepline-hermes-repo/context"
+      - "/home/sprite/deepline-hermes-repo/output"
+    forbidden_paths:
+      - "$HOME"
+      - "/"
+      - ".secrets"
+      - ".env"
+      - "private transcripts not copied into context/source_notes"
+
+  - id: github
+    priority: p1
+    install_preference: hermes_catalog
+    purpose: "Branch, commit, PR, issue, and repo inspection workflows."
+    default_scope: "read repo, create branch, create PR"
+    forbidden_by_default:
+      - delete_repo
+      - force_push
+      - admin_org
+
+  - id: slack
+    priority: p1
+    install_preference: composio_or_catalog
+    purpose: "Search selected GTM/customer channels and draft replies."
+    default_scope: "search/read/draft"
+    forbidden_by_default:
+      - broad_channel_history
+      - send_without_approval
+
+  - id: google-drive-sheets-docs
+    priority: p1
+    install_preference: composio_or_catalog
+    purpose: "Read approved sheets/docs, write draft campaign artifacts, export briefs."
+    default_scope: "selected files only"
+    forbidden_by_default:
+      - domain-wide access
+      - delete
+      - share_publicly
+
+  - id: hubspot
+    priority: p1
+    install_preference: composio_or_direct_api
+    purpose: "Search contacts/companies/deals, draft notes and proposed updates."
+    default_scope: "read/search/draft-update"
+    forbidden_by_default:
+      - bulk_update
+      - delete
+      - send_sequence
+    rule: "Always search existing contacts/companies before proposing creation."
+
+  - id: gmail
+    priority: p1
+    install_preference: composio_or_existing_script
+    purpose: "Create drafts only."
+    default_scope: "create draft, search own sent context when approved"
+    forbidden_by_default:
+      - send
+      - delete
+      - label-bulk
+    rule: "Never ask user to copy/paste email manually. Draft through approved tool."
+
+  - id: notion
+    priority: p2
+    install_preference: direct_api_or_composio
+    purpose: "Create/update internal pages after searching for duplicates."
+    default_scope: "search/read/create page"
+    forbidden_by_default:
+      - delete
+      - broad workspace mutation
+
+  - id: browser
+    priority: p2
+    install_preference: built_in_or_catalog
+    purpose: "Research public pages and inspect app UIs when API connector is unavailable."
+    default_scope: "manual review and screenshot"
+    rule: "Prefer APIs/MCPs over browser actions for authenticated SaaS."
+
+  - id: web-search
+    priority: p2
+    install_preference: built_in
+    purpose: "Fresh company/account/prospect research."
+    default_scope: "public web only"
+
+  - id: agent-mail
+    priority: p1
+    install_preference: cli_or_hosted_mcp
+    purpose: "Dedicated agent inbox for identity, inbound routing, thread summaries, and draft handling."
+    remote_url: "https://mcp.agentmail.to/mcp"
+    default_scope: "list inboxes, read threads/messages, create drafts"
+    preferred_for:
+      - agent_identity
+      - inbound_email_context
+      - thread_summaries
+      - draft_replies
+      - webhook_or_websocket_inbound_events
+    forbidden_by_default:
+      - send_message
+      - send_draft
+      - delete_inbox
+      - delete_draft
+      - broad_attachment_download
+    rule: "AgentMail is an inbox and draft channel. Do not use it for unsupervised outbound."
