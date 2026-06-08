@@ -55,11 +55,11 @@ Deepline integrations, enrichment providers, CRM, outreach, and research tools
 
 Configure access with environment variables and call the Deepline v2 SDK/API directly. Managed sessions should not depend on local Deepline CLI state.
 
-## Hermes Agent Pack
+## Hermes Compatibility
 
-This repo also includes `hermes-agent-pack/`, a standalone operating pack for running the Deepline GTM motion inside Hermes on a persistent Sprite/Fly-style workspace.
+This repo also includes `hermes-agent-pack/`, the compatibility layer for running the Deepline GTM agent inside Hermes on a persistent Sprite/Fly-style workspace.
 
-Use it when Hermes is the operator interface and Deepline is the GTM execution, logging, workflow, and observability layer. The pack includes:
+Use it when Hermes is the operator interface and Deepline is the GTM execution, logging, workflow, and observability layer. The pack makes the Hermes setup explicit:
 
 - pruned Deepline context, claims, exclusions, and Jai voice rules
 - Hermes prompts and skills for one primary `deepline-gtm-agent`
@@ -69,6 +69,22 @@ Use it when Hermes is the operator interface and Deepline is the GTM execution, 
 - the HTML deck for the Hermes AI marketing team call recording
 
 Start with [`hermes-agent-pack/README.md`](hermes-agent-pack/README.md), then run [`hermes-agent-pack/prompts/00_seed_hermes.md`](hermes-agent-pack/prompts/00_seed_hermes.md) in Hermes.
+
+Run the shared eval suite against a Hermes profile with:
+
+```bash
+python tests/run_evals.py \
+  --hermes-command "deeplinegtm -z" \
+  --output tmp/hermes-eval-results.json
+```
+
+For the Sprite-hosted profile:
+
+```bash
+python tests/run_evals.py \
+  --hermes-command "sprite exec -s spawn-k2qb -- deeplinegtm -z" \
+  --output tmp/hermes-sprite-eval-results.json
+```
 
 ## Interfaces
 

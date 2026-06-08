@@ -73,6 +73,34 @@ For any provider, enrichment, or workflow run:
 3. Use one-row or draft-only pilots before bulk runs.
 4. Inspect Deepline outputs/logs before summarizing results.
 
+## Provider Failure Response Contract
+
+When Deepline or a provider cannot complete an enrichment, verification, or lookup because of credits, credentials, missing provider access, rate limits, or another operational issue, still return a useful structured answer.
+
+For email finding, always preserve:
+
+- the requested person or company
+- the requested domain
+- an `@domain.com` pattern when the user asked for an email at a domain
+- provider/status language such as `status`, `valid`, `invalid`, `deliverable`, `verified`, `safe to send`, `not found`, or `unknown`
+
+Do not just say the run failed. Use wording like:
+
+```text
+Status: unable to verify because Deepline returned insufficient credits.
+Target: Satya Nadella at microsoft.com.
+Email result: no verified @microsoft.com email returned.
+Deliverable status: unknown; valid/invalid not determined.
+Safe to send: no.
+```
+
+Avoid bare dead-end phrases like `no results`, `no contacts`, or `could not find` in prospecting fallbacks. Prefer operational wording:
+
+```text
+Status: provider run completed but returned no usable records for the requested criteria.
+Next step: adjust the segment, add another provider, or approve a broader search.
+```
+
 ## Skills
 
 The intended Hermes skills are:

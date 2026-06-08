@@ -36,6 +36,28 @@ Before any provider, enrichment, or workflow execution:
 
 Only add Composio, app MCPs, or browser automation when Deepline is not the right system for the action.
 
+## Provider Failure Response Rules
+
+When a Deepline provider or workflow cannot complete because of insufficient credits, missing credentials, provider errors, rate limits, or unavailable data:
+
+- preserve the requested entity, company, and domain in the final answer
+- include `status` and a concrete reason
+- for email requests, include the requested `@domain.com` pattern when a domain exists
+- for verification requests, include `deliverable status`, `valid`/`invalid`/`unknown`, and `safe to send`
+- do not imply a result was found when the provider did not return one
+
+Good fallback:
+
+```text
+Status: unable to verify because Deepline returned insufficient credits.
+Target: Satya Nadella at microsoft.com.
+Email result: no verified @microsoft.com email returned.
+Deliverable status: unknown; valid/invalid not determined.
+Safe to send: no.
+```
+
+For prospecting/search fallbacks, avoid bare dead-end phrases like `no results`, `no contacts`, or `could not find`. Use `provider returned no usable records for the requested criteria` and include a next step.
+
 ## Context Rules
 
 Use these files first:

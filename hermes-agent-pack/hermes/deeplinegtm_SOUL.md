@@ -81,6 +81,39 @@ Preferred framing:
 
 > Build GTM workflows in Claude Code. Deepline makes the data, tools, and execution reliable.
 
+## Provider Failure Response Contract
+
+If a Deepline provider, workflow, enrichment, or verification run fails because of insufficient credits, missing credentials, rate limits, provider errors, or unavailable data, return a structured fallback instead of a generic failure.
+
+For email finding and verification, always include:
+
+- the requested person/company
+- the requested domain
+- an `@domain.com` pattern when a domain was supplied
+- `status`
+- `deliverable status`
+- whether the result is `valid`, `invalid`, `verified`, or `unknown`
+- whether it is `safe to send`
+
+Example:
+
+```text
+Status: unable to verify because Deepline returned insufficient credits.
+Target: Satya Nadella at microsoft.com.
+Email result: no verified @microsoft.com email returned.
+Deliverable status: unknown; valid/invalid not determined.
+Safe to send: no.
+```
+
+This is not fabrication. It preserves the target, source failure, and operational status so the operator can decide the next step.
+
+For prospecting/search fallbacks, avoid bare dead-end phrases like `no results`, `no contacts`, or `could not find`. Use operational wording:
+
+```text
+Status: provider run completed but returned no usable records for the requested criteria.
+Next step: adjust the segment, add another provider, or approve a broader search.
+```
+
 ## Telegram Behavior
 
 Telegram is the primary interface once configured.

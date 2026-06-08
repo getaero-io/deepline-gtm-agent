@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import sys
 import time
 from dataclasses import dataclass, field
@@ -48,6 +49,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-live-api", action="store_true",
                    help="Mock deepline_execute — fast, no API credits consumed")
     p.add_argument("--url", help="Test deployed agent via HTTP instead of direct Python invoke")
+    p.add_argument(
+        "--hermes-command",
+        help=(
+            "Run each eval through a Hermes CLI command instead of Deepline direct/API mode. "
+            "Example: --hermes-command 'deeplinegtm -z' or "
+            "--hermes-command 'sprite exec -s spawn-k2qb -- deeplinegtm -z'."
+        ),
+    )
+    p.add_argument(
+        "--hermes-cwd",
+        help="Optional working directory for the Hermes command.",
+    )
+    p.add_argument(
+        "--hermes-timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait for each Hermes eval command. Default: 600.",
+    )
     p.add_argument("--verbose", "-v", action="store_true", help="Show full agent output")
     p.add_argument("--output", default="tmp/eval-results.json", help="JSON output path")
     return p.parse_args()
@@ -247,6 +266,53 @@ async def run_agent_http(
 
     # We can't capture tool calls over HTTP — return empty list; tool assertions
     # will be marked as SKIPPED by the caller.
+    return reply, []
+
+
+async def run_agent_hermes(
+    prompt: str,
+    command: str,
+    cwd: str | None = None,
+    timeout: float = 600.0,
+    verbose: bool = False,
+) -> tuple[str, list[ToolCallRecord]]:
+    """Run an eval prompt through a Hermes CLI profile.
+
+    The command is split with shell-like quoting and the prompt is appended as
+    the final argument. This works with both local profile aliases and Sprite:
+
+        deeplinegtm -z "<prompt>"
+        sprite exec -s spawn-k2qb -- deeplinegtm -z "<prompt>"
+
+    Hermes CLI output does not expose structured Deepline tool-call events, so
+    response assertions are evaluated and tool-call assertions are skipped.
+    """
+    argv = shlex.split(command)
+    if not argv:
+        raise RuntimeError("--hermes-command cannot be empty")
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        prompt,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.communicate()
+        raise RuntimeError(f"Hermes command timed out after {timeout:.0f}s") from exc
+
+    reply = stdout.decode("utf-8", errors="replace").strip()
+    err = stderr.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        detail = err or reply
+        raise RuntimeError(f"Hermes command exited {proc.returncode}: {detail[:500]}")
+    if verbose:
+        print(f"\n  Reply: {reply[:300]}")
+        if err:
+            print(f"\n  Stderr: {err[:300]}")
     return reply, []
 
 
@@ -501,6 +567,9 @@ async def run_eval(
     run_num: int = 1,
     mock_api: bool = False,
     http_url: Optional[str] = None,
+    hermes_command: Optional[str] = None,
+    hermes_cwd: Optional[str] = None,
+    hermes_timeout: float = 600.0,
     verbose: bool = False,
 ) -> EvalRunResult:
     eval_id = eval_def["id"]
@@ -512,7 +581,15 @@ async def run_eval(
 
     try:
         capture = ToolCallCapture()
-        if http_url:
+        if hermes_command:
+            reply, calls = await run_agent_hermes(
+                prompt,
+                hermes_command,
+                cwd=hermes_cwd,
+                timeout=hermes_timeout,
+                verbose=verbose,
+            )
+        elif http_url:
             reply, calls = await run_agent_http(prompt, http_url, capture, verbose=verbose)
         else:
             reply, calls = await run_agent_direct(prompt, capture, mock_api=mock_api, verbose=verbose)
@@ -522,8 +599,8 @@ async def run_eval(
 
     duration = time.time() - t0
 
-    if http_url or mock_api:
-        # Native v2 mode: response assertions checked, tool assertions skipped
+    if http_url or mock_api or hermes_command:
+        # HTTP/mock/Hermes modes: response assertions checked, tool assertions skipped
         expectations = check_expectations_http(eval_def, reply)
     else:
         # Direct mode: all assertions fully checked
@@ -622,7 +699,11 @@ async def main() -> int:
         print("No evals matched. Check --eval / --tags.")
         return 1
 
-    mode = f"HTTP:{args.url}" if args.url else ("mock" if args.no_live_api else "live API")
+    mode = (
+        f"Hermes:{args.hermes_command}"
+        if args.hermes_command
+        else (f"HTTP:{args.url}" if args.url else ("mock" if args.no_live_api else "live API"))
+    )
     print(f"\n{'='*70}")
     print(f"  GTM Agent Evals — {len(evals)} evals × {args.runs} run(s) — mode: {mode}")
     print(f"{'='*70}\n")
@@ -637,6 +718,9 @@ async def main() -> int:
                 run_num=run_num,
                 mock_api=args.no_live_api,
                 http_url=args.url,
+                hermes_command=args.hermes_command,
+                hermes_cwd=args.hermes_cwd,
+                hermes_timeout=args.hermes_timeout,
                 verbose=args.verbose,
             )
             print_result(result, verbose=args.verbose)

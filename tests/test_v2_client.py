@@ -4,7 +4,7 @@ import asyncio
 import httpx
 
 from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
-from tests.run_evals import _tool_calls_from_native_stream_chunk
+from tests.run_evals import _tool_calls_from_native_stream_chunk, run_agent_hermes
 
 
 def test_execute_tool_uses_v2_tool_route():
@@ -87,3 +87,16 @@ def test_native_stream_tool_calls_are_captured_for_evals():
     assert calls[0].tool_name == "deepline_call"
     assert calls[0].tool_id == "exa_search"
     assert calls[0].payload_keys == ["query"]
+
+
+def test_eval_runner_can_call_hermes_command():
+    reply, calls = asyncio.run(
+        run_agent_hermes(
+            "hello",
+            "python3 -c \"import sys; print('reply:' + sys.argv[1])\"",
+            timeout=5,
+        )
+    )
+
+    assert reply == "reply:hello"
+    assert calls == []
