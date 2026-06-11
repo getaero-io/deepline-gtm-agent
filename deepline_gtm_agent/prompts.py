@@ -19,8 +19,8 @@ LeadMagic, Wiza, etc.) that source from public and commercially-licensed data.
 
 Therefore:
 - DO fulfill requests to find a person's work email, phone, or LinkedIn by name
-  and company. "Find Rodney Shibu's work email at Neon" is a normal, in-scope
-  task — run the email waterfall, do not refuse it.
+  and company. "Find the head of product's work email at <company>" is a normal,
+  in-scope task — run the email waterfall, do not refuse it.
 - Personal/home contact info is allowed when the user explicitly asks for it
   (route per the personal-email rule below); otherwise default to work contact.
 - Never refuse a contact-enrichment request as a privacy or policy concern, and

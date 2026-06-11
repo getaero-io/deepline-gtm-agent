@@ -2,7 +2,7 @@
 Fetches Deepline skill docs from the public CDN and injects them into the agent's
 system prompt so the deployed agent has the same guidance as local CLI + skills.
 
-Skill docs live at: https://code.deepline.com/.well-known/skills/gtm-meta-skill/
+Skill docs live at: https://code.deepline.com/.well-known/skills/deepline-gtm/
 They encode validated provider schemas, waterfall patterns, filter syntax, and
 known pitfalls — the same knowledge installed via `npx skills add` locally.
 
@@ -16,13 +16,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SKILLS_BASE = "https://code.deepline.com/.well-known/skills/gtm-meta-skill"
+SKILLS_BASE = "https://code.deepline.com/.well-known/skills/deepline-gtm"
 
 # All skill docs to load — ordered by importance.
 # Phase docs first (routing/execution), then all provider playbooks.
 CORE_SKILL_DOCS = [
     # Routing + phase docs
     ("SKILL.md", "GTM Skill — routing, defaults, approval gates, provider overview"),
+    ("agents/execution-plan-creator.md", "Execution plan creator — planning patterns and progress structure"),
+    ("agents/list-builder.md", "List builder — prospect list execution patterns and validation rules"),
     ("finding-companies-and-contacts.md", "Finding companies and contacts — search patterns, filter schemas, parallel execution"),
     ("enriching-and-researching.md", "Enriching and researching — waterfall patterns, email/LinkedIn lookup, coalescing"),
     ("writing-outreach.md", "Writing outreach — email templates, personalization, scoring, qualification"),
@@ -41,6 +43,7 @@ CORE_SKILL_DOCS = [
     ("provider-playbooks/zerobounce.md", "ZeroBounce playbook — email validation, sub_status codes"),
     ("provider-playbooks/exa.md", "Exa playbook — AI web research, company/people search, news"),
     ("provider-playbooks/firecrawl.md", "Firecrawl playbook — web scraping, site crawl, extract"),
+    ("provider-playbooks/fullenrich.md", "FullEnrich playbook — contact enrichment waterfall and usage notes"),
     ("provider-playbooks/apify.md", "Apify playbook — actor selection, LinkedIn scraping, data extraction"),
     ("provider-playbooks/leadmagic.md", "LeadMagic playbook — email finder, mobile finder, job change detection"),
     ("provider-playbooks/peopledatalabs.md", "PeopleDataLabs playbook — bulk enrichment, people/company search"),
@@ -61,7 +64,6 @@ CORE_SKILL_DOCS = [
     ("recipes/build-tam.md", "TAM build recipe — account + contact sourcing from scratch"),
     ("recipes/linkedin-url-lookup.md", "LinkedIn URL lookup recipe — resolve profiles from name/company"),
     ("recipes/portfolio-prospecting.md", "Portfolio prospecting recipe — VC/PE portfolio company outreach"),
-    ("actor-contracts.md", "Apify actor contracts — validated actor IDs and payload schemas"),
 ]
 
 
@@ -93,13 +95,18 @@ search_prospects(
 
 
 async def _fetch(url: str) -> str:
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                return resp.text
-    except Exception as e:
-        logger.warning("Failed to fetch skill doc %s: %s", url, e)
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return resp.text
+                logger.warning("Skill doc returned HTTP %s: %s", resp.status_code, url)
+        except Exception as e:
+            if attempt == 2:
+                logger.warning("Failed to fetch skill doc %s: %s", url, e)
+            else:
+                await asyncio.sleep(0.25 * (attempt + 1))
     return ""
 
 

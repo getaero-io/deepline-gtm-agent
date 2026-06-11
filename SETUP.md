@@ -1,187 +1,59 @@
 # Setup Guide
 
-Two paths: **CLI** (fast, scriptable, good for agents and devs) and **UI** (step-by-step, good for anyone).
-
----
+This guide deploys the Deepline v2 native agent/chat broker. It uses environment variables and the Deepline SDK/API, with no dependency on local Deepline CLI state.
 
 ## Railway
 
 ### CLI setup
 
 ```bash
-# Install Railway CLI
 npm install -g @railway/cli
-
-# Authenticate
 railway login
+railway init
 
-# Link to existing project or create new one
-railway init                  # new project
-# or
-railway link                  # link to existing
-
-# Set all required env vars in one shot
 railway variables set \
   DEEPLINE_API_KEY="dlp_..." \
-  OPENAI_API_KEY="sk-..." \
-  LLM_MODEL="openai:gpt-4o" \
   PORT="8000"
 
-# Deploy
 railway up --detach
-
-# Get your public domain
 railway domain
 ```
 
-Your domain will look like `your-app-name.up.railway.app`. You'll need it for the Slack setup below.
+Optional production variables:
 
-To update env vars after deploying:
 ```bash
-railway variables set SLACK_BOT_TOKEN="xoxb-..." SLACK_SIGNING_SECRET="..."
-railway up --detach   # redeploy to pick up new vars
+railway variables set \
+  API_KEY="choose-a-server-api-key" \
+  CORS_ORIGINS="https://your-app.example"
+railway up --detach
 ```
-
-To tail logs:
-```bash
-railway logs
-```
-
----
 
 ### UI setup
 
-1. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub repo
-2. Connect your fork of this repo
-3. Railway auto-detects the `Dockerfile` and builds it
-4. Go to your service → **Variables** → add:
-   - `DEEPLINE_API_KEY` — from [code.deepline.com](https://code.deepline.com)
-   - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
-   - `LLM_MODEL` — e.g. `openai:gpt-4o` or `anthropic:claude-opus-4-6`
-   - `PORT` — `8000`
-5. Go to **Settings** → **Networking** → **Generate Domain** → copy the URL
+1. Go to [railway.app](https://railway.app) and create a new project from your GitHub repo.
+2. Railway builds with `managed_agent/Dockerfile`.
+3. Add `DEEPLINE_API_KEY` and `PORT=8000` in the service variables.
+4. Generate a public domain under **Settings** -> **Networking**.
 
----
+## Redis
 
-## Redis (optional but recommended for Slack)
+Redis is optional. Add it if you want Slack thread history to survive deploys and restarts.
 
-Slack conversation history is persisted in Redis with a 7-day TTL per thread. Without Redis, history is in-memory and lost on restart.
-
-**Add Redis on Railway:**
-
-1. Railway dashboard → your project → **New** → **Database** → **Add Redis**
-2. Railway automatically sets `REDIS_URL` in your service environment — no manual config needed.
-
----
+1. Railway dashboard -> your project -> **New** -> **Database** -> **Add Redis**.
+2. Railway sets `REDIS_URL` automatically.
 
 ## Slack
 
-You need three things: a **bot token** (`xoxb-...`), a **signing secret**, and the **events webhook** pointing at your Railway URL.
+You need a bot token, signing secret, and events webhook pointed at your Railway domain.
 
-### CLI setup (fast path — uses the Slack manifest)
+### Manifest path
 
-```bash
-# Install Slack CLI
-curl -fsSL https://downloads.slack-edge.com/slack-cli/install.sh | bash
-
-# Authenticate
-slack login
-
-# Create the app from the manifest in this repo
-# First update the two placeholder URLs in slack-manifest.json:
-sed -i '' 's|YOUR_RAILWAY_DOMAIN|your-app.up.railway.app|g' slack-manifest.json
-
-# Create app from manifest
-slack app create --manifest slack-manifest.json
-
-# Install to your workspace
-slack app install
-
-# Get the bot token and signing secret
-slack app list        # shows your app ID
-slack app credentials # shows client ID, client secret, signing secret
-```
-
-After the app is created and installed, get the bot token from the Slack UI:
-`api.slack.com/apps` → your app → **OAuth & Permissions** → copy `xoxb-...`
-
-Then set both in Railway:
-```bash
-railway variables set \
-  SLACK_BOT_TOKEN="xoxb-..." \
-  SLACK_SIGNING_SECRET="..."
-railway up --detach
-```
-
----
-
-### UI setup (step by step)
-
-**Step 1 — Create the app**
-
-Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App**.
-
-Two options:
-- **From manifest** (faster) — paste the contents of `slack-manifest.json` (after replacing `YOUR_RAILWAY_DOMAIN`). This pre-fills all scopes and event subscriptions.
-- **From scratch** — pick a name and workspace, then configure manually below.
-
----
-
-**Step 2 — Add bot scopes** *(skip if you used the manifest)*
-
-**OAuth & Permissions** → **Bot Token Scopes** → Add:
-- `chat:write`
-- `reactions:write`
-- `app_mentions:read`
-- `im:read` + `im:history`
-- `channels:read`
-- `channels:history`
-- `groups:history`
-- `mpim:history`
-
----
-
-**Step 3 — Add redirect URL** *(for the OAuth install flow)*
-
-**OAuth & Permissions** → **Redirect URLs** → Add:
-```
-https://<your-railway-domain>/slack/oauth_redirect
-```
-
----
-
-**Step 4 — Enable Event Subscriptions**
-
-**Event Subscriptions** → toggle **Enable Events** → paste the Request URL:
-```
-https://<your-railway-domain>/slack/events
-```
-
-Slack will send a verification challenge — the server responds automatically. You should see **Verified ✓** within a few seconds.
-
-Under **Subscribe to bot events**, add:
-- `app_mention`
-- `message.im`
-
-Click **Save Changes**.
-
----
-
-**Step 5 — Install to workspace**
-
-**OAuth & Permissions** → **Install to Workspace** → Authorize.
-
-You'll be redirected to `https://<your-railway-domain>/slack/oauth_redirect`. The page will display your `SLACK_BOT_TOKEN`. Copy it.
-
----
-
-**Step 6 — Get the signing secret**
-
-**Basic Information** → **App Credentials** → copy **Signing Secret**.
-
----
-
-**Step 7 — Set env vars in Railway**
+1. Replace `YOUR_RAILWAY_DOMAIN` in `slack-manifest.json` with your Railway hostname.
+2. Go to [api.slack.com/apps](https://api.slack.com/apps) -> **Create New App** -> **From manifest**.
+3. Install the app to your workspace.
+4. In **OAuth & Permissions**, copy the bot token.
+5. In **Basic Information**, copy the signing secret.
+6. Set both in Railway:
 
 ```bash
 railway variables set \
@@ -190,49 +62,51 @@ railway variables set \
 railway up --detach
 ```
 
-Or in the Railway UI: your service → **Variables** → add both values → **Deploy**.
+### Manual path
 
----
+Create a Slack app from scratch and configure:
 
-**Step 8 — Test**
+| Area | Value |
+|---|---|
+| Redirect URL | `https://<your-railway-domain>/slack/oauth_redirect` |
+| Events URL | `https://<your-railway-domain>/slack/events` |
+| Bot events | `app_mention`, `message.im` |
+| Bot scopes | `chat:write`, `reactions:write`, `app_mentions:read`, `im:read`, `im:history`, `channels:read`, `channels:history`, `groups:history`, `mpim:history` |
 
-DM `@Deepline GTM Agent` in Slack:
-
-```
-Find 3 VP of Sales at B2B SaaS companies, 100–500 employees, US
-```
-
-The bot reacts with 👀 while processing, then replies in-thread and maintains conversation history per thread.
-
----
-
-## Verify everything is working
+## Verify
 
 ```bash
-# Health check
 curl https://<your-railway-domain>/health
-
-# Expected response:
-# {"status":"ok","agent":"deepline-gtm-agent","slack":"configured","skills":"6 docs loaded"}
 ```
 
-If `slack` shows `"not configured"`, `SLACK_BOT_TOKEN` isn't set. If `skills` shows `"not loaded"`, the server can't reach `code.deepline.com` — check `DEEPLINE_API_KEY`.
+Expected status is `ok` once required configuration is present.
 
----
+Test chat:
 
-## Environment variables reference
+```bash
+curl -X POST https://<your-railway-domain>/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Find 3 VP Sales at B2B SaaS companies, 100-500 employees, US"}'
+```
+
+If `API_KEY` is set, include:
+
+```bash
+-H "Authorization: Bearer <API_KEY>"
+```
+
+## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `DEEPLINE_API_KEY` | Yes | From [code.deepline.com](https://code.deepline.com) |
-| `OPENAI_API_KEY` | One of these | OpenAI key |
-| `ANTHROPIC_API_KEY` | One of these | Anthropic key |
-| `LLM_MODEL` | Yes | e.g. `openai:gpt-4o`, `anthropic:claude-opus-4-6` |
-| `PORT` | Yes | `8000` |
-| `SLACK_BOT_TOKEN` | For Slack | `xoxb-...` from OAuth & Permissions |
-| `SLACK_SIGNING_SECRET` | For Slack | From Basic Information → App Credentials |
-| `SLACK_CLIENT_ID` | For OAuth flow | From Basic Information → App Credentials |
-| `SLACK_CLIENT_SECRET` | For OAuth flow | From Basic Information → App Credentials |
-| `REDIS_URL` | Recommended | Enables persistent Slack conversation history (7-day TTL). Railway sets this automatically when you add a Redis plugin. |
-| `API_KEY` | Optional | Protect `/chat` endpoints with bearer auth |
-| `CORS_ORIGINS` | Optional | Comma-separated allowed origins (default: `*`) |
+| `DEEPLINE_API_KEY` | Yes | Deepline v2 API key from [code.deepline.com](https://code.deepline.com) |
+| `PORT` | Yes | Server port, usually `8000` |
+| `API_KEY` | Optional | Protects `/chat` endpoints with bearer auth |
+| `CORS_ORIGINS` | Optional | Comma-separated allowed origins; defaults to `*` |
+| `REDIS_URL` | Optional | Enables persistent Slack conversation history |
+| `SLACK_BOT_TOKEN` | For Slack | Bot token from Slack OAuth |
+| `SLACK_SIGNING_SECRET` | For Slack | Slack signing secret |
+| `SLACK_CLIENT_ID` | Optional | Used by Slack OAuth install flow |
+| `SLACK_CLIENT_SECRET` | Optional | Used by Slack OAuth install flow |
+
+`ANTHROPIC_API_KEY`, `MANAGED_AGENT_ID`, and `MANAGED_ENVIRONMENT_ID` are optional and only needed for manual Anthropic Managed Agent experiments.

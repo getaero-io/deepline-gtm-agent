@@ -2,15 +2,14 @@
 """
 GTM Agent Eval Runner
 
-Invokes the agent with test prompts, captures which tools were called
-(both high-level GTM tools and underlying deepline_call tool_ids),
-and evaluates pass/fail against expectations defined in tests/evals.yml.
+Invokes the native Deepline v2 agent with test prompts and evaluates
+pass/fail against expectations defined in tests/evals.yml.
 
 Usage:
     python3 tests/run_evals.py                        # run all evals
     python3 tests/run_evals.py --tags core            # filter by tag
     python3 tests/run_evals.py --eval enrich-person   # run one eval
-    python3 tests/run_evals.py --no-live-api          # mock deepline_execute
+    python3 tests/run_evals.py --no-live-api          # mock native response
     python3 tests/run_evals.py --url https://...      # test deployed endpoint
 """
 
@@ -27,7 +26,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
-from unittest.mock import patch
 
 import yaml
 
@@ -130,7 +128,7 @@ class ToolCallCapture:
 
 
 # ---------------------------------------------------------------------------
-# Agent runner — direct Python invoke
+# Agent runner — native Deepline v2 direct stream
 # ---------------------------------------------------------------------------
 
 async def run_agent_direct(
@@ -139,84 +137,59 @@ async def run_agent_direct(
     mock_api: bool = False,
     verbose: bool = False,
 ) -> tuple[str, list[ToolCallRecord]]:
-    """
-    Invoke the GTM agent directly via Python and return (reply, tool_calls).
-
-    Extracts tool calls from LangGraph message history (reliable) and patches
-    deepline_execute to record Deepline API sub-calls (for tool_id tracking).
-    """
-    from deepline_gtm_agent.dynamic_tools import load_tool_catalog
-    from deepline_gtm_agent import create_gtm_agent
-    import deepline_gtm_agent.deepline as dl_module
-
-    original_execute = dl_module.deepline_execute
-
-    def tracking_execute(operation: str, payload: dict) -> dict:
-        if mock_api:
-            result = _mock_response(operation, payload)
-            capture.calls.append(ToolCallRecord(
-                tool_name="deepline_call",
-                tool_id=operation,
-                payload_keys=list(payload.keys()),
-                result_keys=list(result.keys()),
-            ))
-            return result
-        try:
-            result = original_execute(operation, payload)
-        except Exception as e:
-            capture.calls.append(ToolCallRecord(
-                tool_name="deepline_call",
-                tool_id=operation,
-                payload_keys=list(payload.keys()),
-                error=str(e),
-            ))
-            raise
-        capture.calls.append(ToolCallRecord(
-            tool_name="deepline_call",
-            tool_id=operation,
-            payload_keys=list(payload.keys()),
-            result_keys=list(result.keys()) if isinstance(result, dict) else [],
-        ))
-        return result
-
-    with patch.object(dl_module, "deepline_execute", tracking_execute):
-        catalog = load_tool_catalog()
-        model = os.environ.get("LLM_MODEL", "anthropic:claude-opus-4-6")
-        agent = create_gtm_agent(model=model, tool_catalog=catalog)
-        result = await agent.ainvoke({"messages": [{"role": "user", "content": prompt}]})
-
-    # ── Extract tool calls from LangGraph message history ─────────────────────
-    # LangChain records every AIMessage.tool_calls in the state, giving us
-    # authoritative tool names regardless of how functions are imported.
-    for msg in result["messages"]:
-        tool_calls = getattr(msg, "tool_calls", None)
-        if tool_calls:
-            for tc in tool_calls:
-                name = tc.get("name", "")
-                args = tc.get("args", {})
-                if name == "deepline_call":
-                    # Already tracked via tracking_execute; skip to avoid duplication
-                    continue
-                capture.calls.insert(0, ToolCallRecord(
-                    tool_name=name,
-                    payload_keys=list(args.keys()),
-                ))
-
-    last = result["messages"][-1]
-    content = last.content
-    if isinstance(content, list):
-        reply = "".join(
-            block["text"] if isinstance(block, dict) else str(block)
-            for block in content
-            if not isinstance(block, dict) or block.get("type") == "text"
-        )
+    """Invoke Deepline's native v2 agent stream and return (reply, [])."""
+    if mock_api:
+        reply = "Mock native Deepline v2 response. Tool routing is skipped in native eval mode."
+        calls = []
     else:
-        reply = str(content)
+        from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
+
+        parts: list[str] = []
+        calls = []
+        async for chunk in DeeplineV2Client().stream_agent(
+            {
+                "prompt": prompt,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_mode": "stream",
+            }
+        ):
+            parts.append(extract_text_from_stream_chunk(chunk))
+            calls.extend(_tool_calls_from_native_stream_chunk(chunk))
+        reply = "".join(parts)
 
     if verbose:
         print(f"\n  Reply: {reply[:300]}")
 
-    return reply, capture.calls
+    return reply, calls
+
+
+def _tool_calls_from_native_stream_chunk(chunk: str) -> list[ToolCallRecord]:
+    calls: list[ToolCallRecord] = []
+    for raw_line in chunk.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") not in {"tool-call", "tool_call"}:
+            continue
+        tool_name = event.get("toolName") or event.get("tool_name") or event.get("name")
+        if not isinstance(tool_name, str) or not tool_name:
+            continue
+        payload = event.get("input") if isinstance(event.get("input"), dict) else {}
+        calls.append(ToolCallRecord(
+            tool_name="deepline_call",
+            tool_id=tool_name,
+            payload_keys=list(payload.keys()),
+        ))
+    return calls
 
 
 def _mock_response(operation: str, payload: dict) -> dict:
@@ -260,14 +233,15 @@ async def run_agent_http(
     async with httpx.AsyncClient(timeout=480) as client:
         resp = await client.post(
             f"{url.rstrip('/')}/chat",
-            json={"messages": [{"role": "user", "content": prompt}]},
+            json={"message": prompt, "messages": [{"role": "user", "content": prompt}]},
             headers=headers,
         )
 
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-    reply = resp.json().get("message", "")
+    body = resp.json()
+    reply = body.get("reply") or body.get("message") or ""
     if verbose:
         print(f"\n  Reply: {reply[:300]}")
 
@@ -548,8 +522,8 @@ async def run_eval(
 
     duration = time.time() - t0
 
-    if http_url:
-        # HTTP mode: response assertions checked, tool assertions skipped
+    if http_url or mock_api:
+        # Native v2 mode: response assertions checked, tool assertions skipped
         expectations = check_expectations_http(eval_def, reply)
     else:
         # Direct mode: all assertions fully checked
@@ -701,9 +675,9 @@ async def main() -> int:
     ], indent=2))
     print(f"  Results written to {output_path}")
 
-    # Exit 1 if any eval has ALL non-skipped expectations failed (total > 0 and passed == 0)
-    fully_failed = [r for r in all_results if r.total > 0 and r.passed == 0]
-    return 1 if fully_failed else 0
+    # Exit 1 if any non-skipped expectation failed.
+    failed = [r for r in all_results if r.error or (r.total > 0 and r.passed < r.total)]
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
