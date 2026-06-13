@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deepline Hermes GTM Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --blue: #1919ff;
+      --ink: #1c112a;
+      --paper: #fcfcfd;
+      --stone: #f0f0f0;
+      --line: #dedee8;
+      --muted: #676274;
+      --green: #0d8f65;
+      --amber: #b86800;
+      --title-size: clamp(1.8rem, 5.4vw, 5.8rem);
+      --h2-size: clamp(1.45rem, 3.8vw, 3.6rem);
+      --h3-size: clamp(1rem, 2.1vw, 1.45rem);
+      --body-size: clamp(0.78rem, 1.35vw, 1.08rem);
+      --small-size: clamp(0.66rem, 1vw, 0.86rem);
+      --slide-padding: clamp(1rem, 4.2vw, 4.8rem);
+      --content-gap: clamp(0.6rem, 2vw, 2rem);
+      --element-gap: clamp(0.35rem, 1vw, 1rem);
+    }
+    html, body { height: 100%; overflow-x: hidden; }
+    html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--paper);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .03;
+      background-image: radial-gradient(var(--ink) 0.7px, transparent 0.7px);
+      background-size: 9px 9px;
+      z-index: 1;
+    }
+    .slide {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      scroll-snap-align: start;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      background: var(--paper);
+    }
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      max-height: 100%;
+      overflow: hidden;
+      padding: var(--slide-padding);
+      position: relative;
+      z-index: 2;
+    }
+    .brand {
+      position: absolute;
+      top: clamp(.8rem, 2vw, 1.4rem);
+      left: var(--slide-padding);
+      z-index: 4;
+      font-family: Georgia, serif;
+      font-size: clamp(.9rem, 1.4vw, 1.15rem);
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .slide-no {
+      position: absolute;
+      top: clamp(.8rem, 2vw, 1.4rem);
+      right: var(--slide-padding);
+      z-index: 4;
+      font-size: var(--small-size);
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    h1, h2 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 600;
+      letter-spacing: 0;
+      line-height: .98;
+    }
+    h1 { font-size: var(--title-size); max-width: 11ch; }
+    h2 { font-size: var(--h2-size); max-width: 13ch; }
+    h3 { font-size: var(--h3-size); line-height: 1.15; letter-spacing: 0; }
+    p, li { font-size: var(--body-size); line-height: 1.38; color: var(--muted); }
+    .blue { color: var(--blue); }
+    .muted { color: var(--muted); }
+    .kicker { font-size: var(--small-size); color: var(--blue); margin-bottom: 1rem; font-weight: 700; }
+    .rule { height: 1px; background: var(--line); width: 100%; margin: clamp(1rem, 3vh, 2rem) 0; }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(260px, .8fr);
+      gap: clamp(1rem, 4vw, 4rem);
+      align-items: center;
+    }
+    .hero-copy p { max-width: 52ch; margin-top: 1.2rem; font-size: clamp(.95rem, 1.5vw, 1.25rem); color: #4e4859; }
+    .terminal {
+      border: 1px solid var(--ink);
+      background: #fff;
+      box-shadow: 10px 10px 0 var(--ink);
+      padding: clamp(.8rem, 2vw, 1.4rem);
+      font-family: "Courier New", monospace;
+      font-size: clamp(.66rem, 1vw, .88rem);
+      line-height: 1.48;
+      min-height: 18rem;
+    }
+    .prompt-line { color: var(--blue); }
+    .grid-2, .grid-3, .grid-4 {
+      display: grid;
+      gap: var(--element-gap);
+      margin-top: var(--content-gap);
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .panel {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: clamp(.7rem, 1.6vw, 1.2rem);
+      min-height: clamp(6.2rem, 15vh, 9rem);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .panel strong { color: var(--ink); font-size: clamp(.85rem, 1.2vw, 1rem); line-height: 1.2; }
+    .panel span { color: var(--muted); font-size: var(--small-size); line-height: 1.32; margin-top: .6rem; display: block; }
+    .wide { max-width: min(1120px, 92vw); }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr);
+      gap: clamp(1rem, 4vw, 4rem);
+      align-items: center;
+    }
+    .list { display: grid; gap: clamp(.45rem, 1vh, .8rem); margin-top: var(--content-gap); }
+    .list li { list-style: none; border-top: 1px solid var(--line); padding-top: .55rem; }
+    .matrix {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      gap: 1px;
+      margin-top: var(--content-gap);
+    }
+    .cell { background: #fff; padding: clamp(.55rem, 1.4vw, 1rem); min-height: clamp(4.8rem, 11vh, 7rem); }
+    .cell small { color: var(--blue); font-weight: 700; font-size: var(--small-size); display: block; margin-bottom: .4rem; }
+    .code {
+      font-family: "Courier New", monospace;
+      background: var(--ink);
+      color: #fff;
+      padding: clamp(.8rem, 2vw, 1.4rem);
+      font-size: clamp(.62rem, 1vw, .86rem);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      max-height: min(58vh, 540px);
+      overflow: hidden;
+    }
+    .quote {
+      font-family: Georgia, serif;
+      font-size: clamp(1.2rem, 3vw, 2.6rem);
+      line-height: 1.12;
+      max-width: 22ch;
+    }
+    .caption { font-size: var(--small-size); color: var(--muted); margin-top: .85rem; }
+    .stripe {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      height: clamp(.5rem, 1.4vh, 1rem);
+      width: 100%;
+      background: repeating-linear-gradient(90deg, var(--blue) 0 18px, var(--paper) 18px 32px, var(--ink) 32px 35px);
+    }
+    .progress {
+      position: fixed;
+      left: 0;
+      bottom: 0;
+      height: 3px;
+      width: 0;
+      background: var(--blue);
+      z-index: 10;
+      transition: width .2s ease;
+    }
+    .hint {
+      position: fixed;
+      right: 1rem;
+      bottom: .8rem;
+      color: var(--muted);
+      font-size: .72rem;
+      z-index: 11;
+    }
+    .reveal { opacity: 0; transform: translateY(12px); transition: opacity .5s ease, transform .5s ease; }
+    .active .reveal { opacity: 1; transform: translateY(0); }
+    .active .reveal:nth-child(2) { transition-delay: .08s; }
+    .active .reveal:nth-child(3) { transition-delay: .16s; }
+    .active .reveal:nth-child(4) { transition-delay: .24s; }
+    @media (max-width: 820px) {
+      .hero-grid, .split, .grid-2 { grid-template-columns: 1fr; }
+      .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .terminal { min-height: 12rem; }
+      h1, h2 { max-width: 12ch; }
+      .matrix { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .panel { min-height: auto; }
+      .brand, .slide-no { display: none; }
+    }
+    @media (max-height: 700px) {
+      :root {
+        --slide-padding: clamp(.75rem, 3vw, 2rem);
+        --content-gap: clamp(.4rem, 1.5vw, 1rem);
+        --title-size: clamp(1.25rem, 4.5vw, 2.8rem);
+        --h2-size: clamp(1.05rem, 3vw, 2rem);
+      }
+      .panel { min-height: auto; }
+      .terminal { min-height: 11rem; }
+      .hint { display: none; }
+    }
+    @media (max-height: 560px) {
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .code { max-height: 46vh; }
+      .stripe { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .2s !important; }
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" id="progress"></div>
+  <div class="hint">arrow keys / swipe</div>
+  <main>
+    <section class="slide active">
+      <div class="brand">Deepline</div><div class="slide-no">01</div>
+      <div class="slide-content hero-grid">
+        <div class="hero-copy reveal">
+          <div class="kicker">Hermes GTM Agent Pack</div>
+          <h1>go-to-market is code now.</h1>
+          <p>Hermes gives the agent a persistent workspace. Deepline gives it the GTM data, rules, and execution rails that keep it useful.</p>
+        </div>
+        <div class="terminal reveal">
+          <div class="prompt-line">$ hermes</div>
+          <div>read context/deepline_gtm_context.md</div>
+          <div>read claims_and_exclusions.md</div>
+          <div>install only approved MCPs</div>
+          <br />
+          <div class="prompt-line">mode: draft-first</div>
+          <div>gtm operator: ready</div>
+          <div>marketing specialists: ready</div>
+          <div>bulk actions: locked</div>
+        </div>
+      </div>
+      <div class="stripe"></div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">02</div>
+      <div class="slide-content split">
+        <div class="reveal">
+          <h2>the agent is not the moat.</h2>
+          <div class="rule"></div>
+          <p>The agent is the interface. The durable layer is provider routing, validation, context, permissions, workflow state, and execution.</p>
+        </div>
+        <div class="grid-2 reveal">
+          <div class="panel"><strong>Hermes</strong><span>memory, skills, profiles, desktop, gateway, MCP catalog</span></div>
+          <div class="panel"><strong>Deepline</strong><span>GTM data, waterfalls, provider choice, validation, workflow APIs</span></div>
+          <div class="panel"><strong>Connectors</strong><span>Composio, HubSpot, Gmail drafts, Sheets, Slack, GitHub, browser fallback</span></div>
+          <div class="panel"><strong>Context</strong><span>ICP, proof guardrails, Jai voice, exclusions, approved prompts</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">03</div>
+      <div class="slide-content">
+        <h2 class="reveal">what goes into the repo</h2>
+        <div class="matrix reveal">
+          <div class="cell"><small>context</small><p>Pruned Deepline positioning, claims, exclusions, voice rules.</p></div>
+          <div class="cell"><small>connectors</small><p>MCP policy, required apps, scopes, forbidden tools.</p></div>
+          <div class="cell"><small>prompts</small><p>Seed Hermes, launch the GTM operator, split marketing specialists, configure tools.</p></div>
+          <div class="cell"><small>rules</small><p>Draft-first, read-before-write, search-before-create, stop conditions.</p></div>
+          <div class="cell"><small>skills</small><p>One GTM operator, bounded subagent workflows, split marketing specialists.</p></div>
+          <div class="cell"><small>sprites</small><p>Instructions for `spawn-k2qb`, the always-on Hermes workspace.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">04</div>
+      <div class="slide-content split">
+        <div class="reveal">
+          <h2>connector policy: fewer tools, better work.</h2>
+          <p class="caption">Install the connector only when a workflow needs it. Then prune the tools.</p>
+        </div>
+        <ul class="list reveal">
+          <li><strong>Composio:</strong> OAuth layer for GTM SaaS. Prefer scoped actions over browser automation.</li>
+          <li><strong>Filesystem:</strong> this repo and approved output folders only.</li>
+          <li><strong>HubSpot:</strong> search, read, draft updates. No bulk writes.</li>
+          <li><strong>Gmail:</strong> create drafts. No send until approved.</li>
+          <li><strong>Slack / Drive / Sheets:</strong> selected resources, not whole workspaces.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">05</div>
+      <div class="slide-content">
+        <h2 class="reveal">gtm operator + sales workflows</h2>
+        <div class="grid-4 reveal">
+          <div class="panel"><strong>post-call follow-up</strong><span>recap, action table, promised assets, single CTA</span></div>
+          <div class="panel"><strong>account brief</strong><span>company, triggers, likely pain, Deepline angle</span></div>
+          <div class="panel"><strong>CRM hygiene</strong><span>proposed updates with source and confidence</span></div>
+          <div class="panel"><strong>objection library</strong><span>extract objections from calls and map responses</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">06</div>
+      <div class="slide-content">
+        <h2 class="reveal">split marketing specialists</h2>
+        <div class="grid-4 reveal">
+          <div class="panel"><strong>content agent</strong><span>field notes in Jai's voice, claims marked for review</span></div>
+          <div class="panel"><strong>campaign agent</strong><span>market, segment, persona, angle, offer</span></div>
+          <div class="panel"><strong>proof agent</strong><span>approved quotes only, no fabricated stats</span></div>
+          <div class="panel"><strong>voice pass</strong><span>strip AI vocabulary and generic SaaS phrasing</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">07</div>
+      <div class="slide-content split">
+        <div class="reveal">
+          <h2>the prompt to give Hermes first</h2>
+          <p class="caption">This keeps the first run small and prevents transcript sprawl.</p>
+        </div>
+        <div class="code reveal">You are becoming the Deepline GTM Agent.
+
+Read only:
+1. context/deepline_gtm_context.md
+2. context/claims_and_exclusions.md
+3. context/jai_voice_and_copy_rules.md
+4. connectors/connector_manifest.yaml
+5. rules/agent_operating_rules.md
+
+Remember only the smallest useful facts.
+Do not ingest the full transcripts folder.
+Do not connect tools yet.</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">08</div>
+      <div class="slide-content">
+        <h2 class="reveal">day-one rules</h2>
+        <div class="grid-3 reveal">
+          <div class="panel"><strong>draft before send</strong><span>Email, Slack, LinkedIn, CRM notes, Notion pages.</span></div>
+          <div class="panel"><strong>search before create</strong><span>Contacts, companies, pages, docs, issues.</span></div>
+          <div class="panel"><strong>read after write</strong><span>Verify files and summarize diffs.</span></div>
+          <div class="panel"><strong>proof before claim</strong><span>Mark anything unverified as needs review.</span></div>
+          <div class="panel"><strong>no broad context</strong><span>Pull only the relevant excerpt into source notes.</span></div>
+          <div class="panel"><strong>stop on risk</strong><span>Bulk, public, deleting, sending, auth changes.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">09</div>
+      <div class="slide-content split">
+        <div class="reveal">
+          <h2>spawn-k2qb setup path</h2>
+          <p class="caption">Hermes is already installed. The job is to add the repo and configure tools conservatively.</p>
+        </div>
+        <div class="code reveal">sprite use spawn-k2qb
+sprite exec -s spawn-k2qb -- bash -lc 'hermes doctor || true'
+
+cd ~/deepline-hermes-repo
+bash scripts/install_hermes_mcps.sh
+
+# then paste:
+prompts/00_seed_hermes.md
+prompts/01_gtm_agent.md
+prompts/02_marketing_agents.md</div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="brand">Deepline</div><div class="slide-no">10</div>
+      <div class="slide-content split">
+        <div class="reveal">
+          <div class="quote">start with one useful workflow. let the agent earn the next connector.</div>
+          <p class="caption">That is how this stays lightweight enough for GTM work.</p>
+        </div>
+        <div class="grid-2 reveal">
+          <div class="panel"><strong>first GTM run</strong><span>route a follow-up to the sales-workflows subagent</span></div>
+          <div class="panel"><strong>first marketing run</strong><span>content agent drafts, proof agent reviews</span></div>
+          <div class="panel"><strong>first connector test</strong><span>read/search/draft only, no mutating tools</span></div>
+          <div class="panel"><strong>first skill</strong><span>turn the repeated workflow into a Hermes skill</span></div>
+        </div>
+      </div>
+      <div class="stripe"></div>
+    </section>
+  </main>
+  <script>
+    class Deck {
+      constructor() {
+        this.slides = [...document.querySelectorAll('.slide')];
+        this.progress = document.getElementById('progress');
+        this.index = 0;
+        this.touchStart = null;
+        this.bind();
+        this.update();
+      }
+      bind() {
+        window.addEventListener('keydown', (event) => {
+          if (['ArrowDown', 'ArrowRight', 'PageDown', ' '].includes(event.key)) this.go(1);
+          if (['ArrowUp', 'ArrowLeft', 'PageUp'].includes(event.key)) this.go(-1);
+          if (event.key === 'Home') this.to(0);
+          if (event.key === 'End') this.to(this.slides.length - 1);
+        });
+        let wheelLock = false;
+        window.addEventListener('wheel', (event) => {
+          if (wheelLock || Math.abs(event.deltaY) < 28) return;
+          wheelLock = true;
+          this.go(event.deltaY > 0 ? 1 : -1);
+          setTimeout(() => { wheelLock = false; }, 420);
+        }, { passive: true });
+        window.addEventListener('touchstart', (event) => {
+          this.touchStart = event.changedTouches[0].clientY;
+        }, { passive: true });
+        window.addEventListener('touchend', (event) => {
+          if (this.touchStart === null) return;
+          const delta = this.touchStart - event.changedTouches[0].clientY;
+          if (Math.abs(delta) > 42) this.go(delta > 0 ? 1 : -1);
+          this.touchStart = null;
+        }, { passive: true });
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach(entry => entry.target.classList.toggle('active', entry.isIntersecting));
+        }, { threshold: 0.65 });
+        this.slides.forEach(slide => observer.observe(slide));
+        window.addEventListener('scroll', () => this.syncFromScroll(), { passive: true });
+      }
+      syncFromScroll() {
+        const next = Math.round(window.scrollY / window.innerHeight);
+        if (next !== this.index) {
+          this.index = Math.max(0, Math.min(this.slides.length - 1, next));
+          this.update(false);
+        }
+      }
+      go(delta) { this.to(this.index + delta); }
+      to(index) {
+        this.index = Math.max(0, Math.min(this.slides.length - 1, index));
+        this.slides[this.index].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        this.update();
+      }
+      update() {
+        const pct = ((this.index + 1) / this.slides.length) * 100;
+        this.progress.style.width = pct + '%';
+      }
+    }
+    new Deck();
+  </script>
+</body>
+</html>

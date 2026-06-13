@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>I Built An Entire AI Marketing Team With Hermes Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --ink: #1c112a;
+      --paper: #fafaf8;
+      --panel: #fcfcfd;
+      --stone: #f4f4f5;
+      --line: #e0e0e9;
+      --muted: #56515d;
+      --blue: #1919ff;
+      --green: #34d399;
+      --amber: #b86800;
+      --title-size: clamp(2rem, 4.8vw, 4.125rem);
+      --h2-size: clamp(1.45rem, 3.4vw, 3rem);
+      --h3-size: clamp(.92rem, 1.9vw, 1.28rem);
+      --body-size: clamp(.72rem, 1.22vw, 1.02rem);
+      --small-size: clamp(.58rem, .88vw, .78rem);
+      --slide-padding: clamp(.78rem, 3.8vw, 4.5rem);
+      --gap: clamp(.55rem, 1.7vw, 1.7rem);
+      --tight: clamp(.32rem, .9vw, .75rem);
+    }
+
+    html, body { height: 100%; overflow: hidden; background: var(--paper); }
+    body {
+      font-family: Switzer, Geist, Inter, system-ui, -apple-system, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before { content: none; }
+    #deck {
+      height: 100vh;
+      height: 100dvh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scroll-snap-type: y mandatory;
+      scroll-behavior: smooth;
+    }
+    .slide {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      scroll-snap-align: start;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      background: var(--paper);
+    }
+    .slide-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      max-height: 100%;
+      overflow: hidden;
+      padding: var(--slide-padding);
+      position: relative;
+      z-index: 2;
+    }
+    .brand, .slide-no {
+      position: absolute;
+      top: clamp(.7rem, 1.8vw, 1.2rem);
+      z-index: 4;
+      font-size: var(--small-size);
+      color: var(--muted);
+      letter-spacing: 0;
+    }
+    .brand { left: var(--slide-padding); color: var(--ink); font-weight: 800; }
+    .slide-no { right: var(--slide-padding); font-variant-numeric: tabular-nums; }
+    h1, h2 {
+      font-family: Switzer, Geist, Inter, system-ui, -apple-system, sans-serif;
+      font-weight: 500;
+      letter-spacing: -.035em;
+      line-height: 1.04;
+      color: var(--ink);
+    }
+    h1 { font-size: var(--title-size); max-width: 14ch; text-wrap: balance; }
+    h2 { font-size: var(--h2-size); max-width: 14ch; text-wrap: balance; }
+    h3 { font-size: var(--h3-size); line-height: 1.12; font-weight: 740; color: var(--ink); }
+    p, li { font-size: var(--body-size); line-height: 1.36; color: var(--muted); }
+    .mono, .terminal, .chip, .runline {
+      font-family: "Geist Mono", geistMono, ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .blue { color: var(--blue); }
+    .green { color: var(--green); }
+    .amber { color: var(--amber); }
+    .kicker {
+      font-size: var(--small-size);
+      color: var(--blue);
+      font-weight: 600;
+      margin-bottom: .7rem;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      font-family: "Geist Mono", geistMono, ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .rule { height: 1px; width: 100%; background: var(--line); margin: clamp(.7rem, 2vh, 1.3rem) 0; }
+    .hero, .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .9fr);
+      gap: clamp(1rem, 4vw, 4.2rem);
+      align-items: center;
+    }
+    .terminal {
+      background: var(--ink);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 18px;
+      box-shadow: none;
+      padding: clamp(.68rem, 1.6vw, 1.15rem);
+      font-size: clamp(.58rem, .92vw, .8rem);
+      line-height: 1.45;
+      color: rgba(255,255,255,.78);
+      max-height: min(68vh, 560px);
+      overflow: hidden;
+    }
+    .quote {
+      max-width: 88ch;
+      border-left: 6px solid var(--blue);
+      padding-left: clamp(.85rem, 2.2vw, 1.45rem);
+      position: relative;
+    }
+    .quote p {
+      color: var(--ink);
+      font-size: clamp(1.02rem, 1.82vw, 1.72rem);
+      line-height: 1.24;
+      letter-spacing: -.012em;
+      max-width: 42ch;
+    }
+    .lede { max-width: 58ch; margin-top: .9rem; }
+    .stat {
+      font-size: clamp(2.25rem, 8.2vw, 8rem);
+      font-weight: 850;
+      line-height: .86;
+      color: var(--blue);
+      letter-spacing: -.045em;
+      white-space: nowrap;
+    }
+    .panels, .cols, .waterfall, .setup {
+      display: grid;
+      gap: var(--tight);
+      margin-top: var(--gap);
+    }
+    .panels { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .waterfall { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .setup { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+    .panel, .step {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: clamp(.55rem, 1.2vw, .95rem);
+      min-height: clamp(5.1rem, 12vh, 7.8rem);
+    }
+    .panel strong, .step strong { display: block; color: var(--ink); font-size: clamp(.74rem, 1.05vw, .94rem); line-height: 1.16; }
+    .panel span, .step span { display: block; color: var(--muted); font-size: var(--small-size); line-height: 1.3; margin-top: .5rem; }
+    .step b {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.6rem;
+      height: 1.6rem;
+      border: 1px solid var(--blue);
+      border-radius: 7px;
+      color: var(--blue);
+      font-size: var(--small-size);
+      margin-bottom: .55rem;
+    }
+    .table {
+      display: grid;
+      grid-template-columns: 1.15fr .7fr .8fr .8fr;
+      border: 1px solid var(--line);
+      background: var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      gap: 1px;
+      margin-top: var(--gap);
+      max-width: min(1120px, 92vw);
+    }
+    .cell { background: var(--panel); padding: clamp(.55rem, 1.15vw, .9rem); min-height: clamp(4.2rem, 10vh, 6.6rem); }
+    .cell small { display: block; color: var(--blue); font-size: var(--small-size); font-weight: 800; margin-bottom: .35rem; }
+    .cell p { font-size: var(--small-size); }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      padding: .35rem .52rem;
+      border-radius: 8px;
+      font-size: var(--small-size);
+      margin: .25rem .25rem 0 0;
+    }
+    .runline {
+      border-top: 1px solid var(--line);
+      padding-top: .6rem;
+      margin-top: .8rem;
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+    .cue {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      color: var(--blue);
+      font-family: "Geist Mono", geistMono, ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: var(--small-size);
+      font-weight: 800;
+      margin-bottom: .8rem;
+    }
+    .cue::before {
+      content: "";
+      width: .55rem;
+      height: .55rem;
+      background: var(--blue);
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .notes {
+      position: absolute;
+      left: var(--slide-padding);
+      right: var(--slide-padding);
+      bottom: clamp(.7rem, 1.8vw, 1.2rem);
+      z-index: 4;
+      border-top: 1px solid var(--line);
+      padding-top: .5rem;
+      color: var(--muted);
+      font-size: var(--small-size);
+    }
+    .invert { background: var(--ink); color: var(--paper); }
+    .invert h1, .invert h2, .invert h3, .invert .brand { color: var(--paper); }
+    .invert p, .invert .notes, .invert .slide-no { color: #d9d6e1; }
+    .invert .rule { background: #40354e; }
+    .invert .panel, .invert .step, .invert .cell, .invert .chip { color: var(--ink); }
+    .progress {
+      position: fixed;
+      left: 0;
+      bottom: 0;
+      height: 3px;
+      width: calc((var(--index, 1) / var(--total, 12)) * 100%);
+      background: var(--blue);
+      z-index: 12;
+      transition: width .22s ease;
+    }
+    .nav {
+      position: fixed;
+      right: clamp(.65rem, 1.2vw, .95rem);
+      bottom: clamp(.65rem, 1.2vw, .95rem);
+      z-index: 12;
+      display: flex;
+      gap: .35rem;
+    }
+    .nav button {
+      width: 2.15rem;
+      height: 2.15rem;
+      border: 1px solid var(--ink);
+      background: var(--panel);
+      border-radius: 8px;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    @media (max-width: 860px) {
+      .hero, .split { grid-template-columns: 1fr; gap: .9rem; }
+      .panels, .waterfall, .setup, .table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .terminal { max-height: 36vh; box-shadow: 6px 6px 0 var(--ink); }
+      .notes { display: none; }
+    }
+    @media (max-width: 560px) {
+      .panels, .cols, .waterfall, .setup, .table { grid-template-columns: 1fr; }
+      .stat { white-space: normal; }
+      .terminal { max-height: 33vh; }
+    }
+    @media (max-height: 700px) {
+      :root {
+        --slide-padding: clamp(.55rem, 2.8vw, 2.2rem);
+        --gap: clamp(.35rem, 1.2vw, .85rem);
+        --title-size: clamp(1.1rem, 4.25vw, 3.1rem);
+        --h2-size: clamp(.98rem, 2.8vw, 2.05rem);
+        --body-size: clamp(.64rem, 1vw, .84rem);
+        --small-size: clamp(.52rem, .8vw, .68rem);
+      }
+      .notes, .brand, .slide-no { display: none; }
+      .panel, .step, .cell { min-height: auto; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .2s !important; }
+      #deck { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main id="deck">
+    <section class="slide invert" data-title="Title">
+      <div class="brand">Deepline</div><div class="slide-no">01 / 12</div>
+      <div class="slide-content hero">
+        <div>
+          <div class="kicker">CALL RECORDING DECK</div>
+          <h1>I Built An Entire AI Marketing Team With Hermes Agent</h1>
+          <p class="lede">Screen share first. Jai on camera. Dark, technical, crisp. No hype; the work runs live.</p>
+        </div>
+        <div class="terminal">
+          <span class="blue">$ hermes run founder-led-prospecting</span><br>
+          runner: Hermes Agent<br>
+          gtm_data_layer: Deepline<br>
+          interface: Telegram + Session UI<br>
+          output: validated owners + campaign loop<br><br>
+          <span class="green">✓</span> draft-first<br>
+          <span class="green">✓</span> human-approved sends<br>
+          <span class="green">✓</span> state scoped to one user
+        </div>
+      </div>
+      <div class="notes">Anti-ad rule: do not name Deepline in the hook. Product appears when the build runs.</div>
+    </section>
+
+    <section class="slide" data-title="Hook">
+      <div class="brand">Deepline</div><div class="slide-no">02 / 12</div>
+      <div class="slide-content">
+        <div class="cue">HOOK · FIRST 50 SECONDS</div>
+        <div class="quote">
+          <p>A go-to-market motion like this used to need custom APIs and someone who knows scraping cold. It isn't a ten hour Clay build. For this job, Clay can't do it at all.</p>
+          <div class="rule"></div>
+          <p>So I gave one prompt a target area and asked it to go find independent restaurant and grocery owners and hand back their mobile numbers.</p>
+        </div>
+      </div>
+      <div class="notes">Word-for-word. This is the single Clay contrast. Do not add another one later.</div>
+    </section>
+
+    <section class="slide" data-title="Proof">
+      <div class="brand">Deepline</div><div class="slide-no">03 / 12</div>
+      <div class="slide-content split">
+        <div>
+          <div class="kicker">FIRST-50 PROOF</div>
+          <div class="stat">770 / 1,000</div>
+          <p class="lede">validated owner mobile numbers, in about an hour.</p>
+        </div>
+        <div class="terminal">
+          restaurants: 1000<br>
+          validated_owner_mobiles: <span class="green">770</span><br>
+          runtime: about 1 hour<br>
+          send_mode: human_approved<br><br>
+          spoken_number: <span class="green">770</span><br>
+          approval_gate: <span class="green">required</span><br>
+          claim_status: <span class="green">locked interview stat</span>
+        </div>
+      </div>
+      <div class="notes">Say the locked number cleanly. Never say the post-validation row count. Promise the result, not a minutes claim.</div>
+    </section>
+
+    <section class="slide" data-title="Reframe">
+      <div class="brand">Deepline</div><div class="slide-no">04 / 12</div>
+      <div class="slide-content">
+        <h2>The strategy was always the easy part.</h2>
+        <div class="panels">
+          <div class="panel"><strong>90% was ductwork.</strong><span>exports, joins, public records, provider credentials, retries.</span></div>
+          <div class="panel"><strong>10% was judgment.</strong><span>who to target, what good looks like, when to approve.</span></div>
+          <div class="panel"><strong>One prompt collapses the plumbing.</strong><span>not the need for taste, constraints, or approval.</span></div>
+        </div>
+      </div>
+      <div class="notes">Keep the reframe practical. Agents help execute GTM judgment; they do not replace it.</div>
+    </section>
+
+    <section class="slide" data-title="Prompt">
+      <div class="brand">Deepline</div><div class="slide-no">05 / 12</div>
+      <div class="slide-content split">
+        <div>
+          <div class="kicker">SECTION 1</div>
+          <h2>Show the prompt. Fire it.</h2>
+          <p class="lede">The proof is the empty workflow table turning into owners you can actually contact.</p>
+        </div>
+        <div class="terminal">
+          <span class="blue"># switch window: Hermes runner</span><br><br>
+          Find independent cafes and grocery stores in [target area].<br>
+          Pull Secretary of State filings for owner names.<br>
+          Waterfall mobile numbers across approved sources.<br>
+          Validate mobile line type.<br>
+          Research and score accounts.<br>
+          Load qualified owners into Lemlist.<br>
+          Keep sends human-approved.
+        </div>
+      </div>
+      <div class="notes">Name Hermes once: a cloud coding-agent harness. Deepline appears when the table runs.</div>
+    </section>
+
+    <section class="slide" data-title="Live Build">
+      <div class="brand">Deepline</div><div class="slide-no">06 / 12</div>
+      <div class="slide-content">
+        <h2>The live build has five beats.</h2>
+        <div class="waterfall">
+          <div class="step"><b>1</b><strong>Define ICP</strong><span>Plain language or example customers.</span></div>
+          <div class="step"><b>2</b><strong>Find owners</strong><span>The source waterfall fills the table.</span></div>
+          <div class="step"><b>3</b><strong>Research</strong><span>Owner + business context lands on each row.</span></div>
+          <div class="step"><b>4</b><strong>Score</strong><span>Closed-won vs closed-lost signals decide priority.</span></div>
+          <div class="step"><b>5</b><strong>Send loop</strong><span>Lemlist plus daily human approval.</span></div>
+        </div>
+      </div>
+      <div class="notes">Narrate as it lands. If a step is slow, fast-forward and say so.</div>
+    </section>
+
+    <section class="slide" data-title="Waterfall">
+      <div class="brand">Deepline</div><div class="slide-no">07 / 12</div>
+      <div class="slide-content">
+        <h2>The waterfall is the repeatable moment.</h2>
+        <div class="table">
+          <div class="cell"><small>DISCOVERY</small><p>Serper for Maps and search.</p></div>
+          <div class="cell"><small>OWNERSHIP</small><p>Secretary of State filings.</p></div>
+          <div class="cell"><small>SKIP TRACE</small><p>TruePeopleSearch and EnformionGO.</p></div>
+          <div class="cell"><small>VALIDATION</small><p>Trestle line type and activity.</p></div>
+        </div>
+        <p class="runline">Switch window: Deepline workflow table. Say: this is the same infrastructure real-estate investors use to find property owners. Deepline makes it callable from one account.</p>
+      </div>
+      <div class="notes">Do not over-explain providers. The visual is the table filling in live.</div>
+    </section>
+
+    <section class="slide" data-title="Failures">
+      <div class="brand">Deepline</div><div class="slide-no">08 / 12</div>
+      <div class="slide-content">
+        <h2>Where it breaks is the useful part.</h2>
+        <div class="panels">
+          <div class="panel"><strong>Garbage in, garbage out.</strong><span>AI will not tell you how to do your job. Feed closed-won and closed-lost examples.</span></div>
+          <div class="panel"><strong>Discovery stalls.</strong><span>The data has to exist somewhere. Help the agent when a source misses.</span></div>
+          <div class="panel"><strong>Messaging sounds fake.</strong><span>Have it populate a narrow template instead of free-writing.</span></div>
+        </div>
+      </div>
+      <div class="notes">Authority comes from honesty. Do not hedge. Do not hype.</div>
+    </section>
+
+    <section class="slide invert" data-title="Grand Payoff">
+      <div class="brand">Deepline</div><div class="slide-no">09 / 12</div>
+      <div class="slide-content split">
+        <div>
+          <h2>That number does not exist anywhere you can just buy it.</h2>
+          <p class="lede">770 validated owner mobile numbers out of 1,000 restaurants, in about an hour.</p>
+        </div>
+        <div class="terminal">
+          <span class="green">✓</span> owners identified<br>
+          <span class="green">✓</span> mobile line type validated<br>
+          <span class="green">✓</span> accounts scored<br>
+          <span class="green">✓</span> campaign allocated<br>
+          <span class="green">✓</span> daily approval loop ready
+        </div>
+      </div>
+      <div class="notes">This is the bridge into setup. Build was proof; walkthrough is payoff.</div>
+    </section>
+
+    <section class="slide" data-title="Setup">
+      <div class="brand">Deepline</div><div class="slide-no">10 / 12</div>
+      <div class="slide-content">
+        <h2>Stand it up in six steps.</h2>
+        <div class="setup">
+          <div class="step"><b>1</b><strong>Hermes</strong><span>Nous image, cloud runner, persistent host.</span></div>
+          <div class="step"><b>2</b><strong>Fly.io</strong><span>Fly Machine, volume, private dashboard tunnel.</span></div>
+          <div class="step"><b>3</b><strong>Deepline</strong><span>API key, credits, workflows.</span></div>
+          <div class="step"><b>4</b><strong>Telegram</strong><span>Gateway, bot token, allowed user.</span></div>
+          <div class="step"><b>5</b><strong>Customer DB</strong><span>Every run writes to the same user-scoped workspace.</span></div>
+          <div class="step"><b>6</b><strong>First run</strong><span>Same prompt, same user, state carried forward.</span></div>
+        </div>
+      </div>
+      <div class="notes">Use these as signposts. Switch windows only when the step needs the real UI.</div>
+    </section>
+
+    <section class="slide" data-title="Boundary">
+      <div class="brand">Deepline</div><div class="slide-no">11 / 12</div>
+      <div class="slide-content">
+        <h2>Keep all state on one user.</h2>
+        <div class="panels">
+          <div class="panel"><strong>Hermes</strong><span>runner, gateway, dashboard, memory, skills.</span></div>
+          <div class="panel"><strong>Deepline</strong><span>GTM API, 95+ integrations, waterfalls, logs, user-owned database.</span></div>
+          <div class="panel"><strong>Customer DB</strong><span>one user_id, one workspace, every run queryable later.</span></div>
+        </div>
+        <div class="terminal" style="margin-top: var(--gap); max-width: min(940px, 92vw);">
+          <span class="blue">-- customer DB example</span><br>
+          SELECT business_name, owner_name, mobile, source, score<br>
+          FROM customer_db.owner_prospecting_runs<br>
+          WHERE user_id = 'jai_toor'<br>
+          ORDER BY created_at DESC;<br><br>
+          <span class="green">✓</span> rows persist across runs<br>
+          <span class="green">✓</span> no shared global prospect state<br>
+          <span class="green">✓</span> next prompt can reuse history
+        </div>
+        <div class="runline">
+          <span class="chip">SDK</span><span class="chip">CLI</span><span class="chip">API</span><span class="chip">95+ integrations</span><span class="chip">Claude Code</span><span class="chip">Codex</span><span class="chip">Hermes</span>
+        </div>
+      </div>
+      <div class="notes">Give Deepline credit for GTM data work. The user-scoped DB is the state layer.</div>
+    </section>
+
+    <section class="slide invert" data-title="CTA">
+      <div class="brand">Deepline</div><div class="slide-no">12 / 12</div>
+      <div class="slide-content">
+        <div class="cue">END SCREEN · SOFT CTA</div>
+        <div class="quote">
+          <p>You just watched the build, and you have enough to run the first version yourself.</p>
+          <div class="rule"></div>
+          <p>The next step is graduating from one prompt into a full agent that runs the whole motion on its own.</p>
+          <div class="rule"></div>
+          <p>Click this video here, where I walk through building a GTM agent end to end using DeepAgents, Deepline, and Claude Code.</p>
+        </div>
+      </div>
+      <div class="notes">End screen only. Do not name or link the rejected follow-up in the spoken script.</div>
+    </section>
+  </main>
+
+  <div class="progress" id="progress"></div>
+  <nav class="nav" aria-label="Slide controls">
+    <button type="button" id="prev" aria-label="Previous slide">‹</button>
+    <button type="button" id="next" aria-label="Next slide">›</button>
+  </nav>
+
+  <script>
+    class Deck {
+      constructor() {
+        this.container = document.getElementById('deck');
+        this.slides = [...document.querySelectorAll('main > .slide')];
+        this.index = 0;
+        this.total = this.slides.length;
+        this.progress = document.getElementById('progress');
+        document.documentElement.style.setProperty('--total', this.total);
+        document.getElementById('prev').addEventListener('click', () => this.go(this.index - 1));
+        document.getElementById('next').addEventListener('click', () => this.go(this.index + 1));
+        window.addEventListener('keydown', (event) => {
+          if (['ArrowRight', 'PageDown', ' '].includes(event.key)) this.go(this.index + 1);
+          if (['ArrowLeft', 'PageUp'].includes(event.key)) this.go(this.index - 1);
+          if (event.key === 'Home') this.go(0);
+          if (event.key === 'End') this.go(this.total - 1);
+        });
+        let wheelLock = false;
+        this.container.addEventListener('wheel', (event) => {
+          if (wheelLock || Math.abs(event.deltaY) < 30) return;
+          wheelLock = true;
+          this.go(this.index + (event.deltaY > 0 ? 1 : -1));
+          setTimeout(() => { wheelLock = false; }, 420);
+        }, { passive: true });
+        let startY = null;
+        window.addEventListener('touchstart', (event) => { startY = event.touches[0].clientY; }, { passive: true });
+        window.addEventListener('touchend', (event) => {
+          if (startY === null) return;
+          const delta = startY - event.changedTouches[0].clientY;
+          if (Math.abs(delta) > 45) this.go(this.index + (delta > 0 ? 1 : -1));
+          startY = null;
+        }, { passive: true });
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              this.index = this.slides.indexOf(entry.target);
+              this.update();
+            }
+          });
+        }, { root: this.container, threshold: 0.62 });
+        this.slides.forEach((slide) => observer.observe(slide));
+        this.update();
+      }
+      go(nextIndex) {
+        const safeIndex = Math.max(0, Math.min(this.total - 1, nextIndex));
+        this.container.scrollTo({ top: this.slides[safeIndex].offsetTop, behavior: 'smooth' });
+        this.index = safeIndex;
+        this.update();
+      }
+      update() {
+        document.documentElement.style.setProperty('--index', this.index + 1);
+        this.progress.style.width = `${((this.index + 1) / this.total) * 100}%`;
+      }
+    }
+    new Deck();
+  </script>
+</body>
+</html>

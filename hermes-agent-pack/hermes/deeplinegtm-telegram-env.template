@@ -1,0 +1,23 @@
+# Deepline GTM Hermes profile Telegram env template
+#
+# Copy values into:
+# /home/sprite/.hermes/profiles/deeplinegtm/.env
+#
+# Do not commit real values.
+
+# Required for Telegram gateway.
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_USERS=
+
+# Keep this disabled for production. Use explicit allowlists.
+GATEWAY_ALLOW_ALL_USERS=false
+
+# Optional: set if using group/topic workflows later.
+# TELEGRAM_HOME_CHANNEL=
+# TELEGRAM_WEBHOOK_URL=
+
+# Optional AgentMail identity/inbox.
+# Use scripts/setup_agentmail.sh to create and write these.
+AGENTMAIL_API_KEY=
+AGENTMAIL_INBOX_ID=
+AGENTMAIL_EMAIL=
