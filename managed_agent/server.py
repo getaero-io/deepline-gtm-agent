@@ -93,9 +93,50 @@ is requested, return the artifact/status details Deepline produced and the next
 approval step before any full enrichment.
 """
 
+PRODUCTION_GTM_AGENT_INSTRUCTIONS = """\
+Production GTM agent requests must use this operating loop:
+
+1. Source: gather account/contact/context from named systems or web sources.
+2. Verify: state what is confirmed, what is inferred, and what is missing.
+3. Bound tools: use only the minimum tools needed; respect auth/scopes and do not
+   spray every provider when a focused workflow or Deepline play exists.
+4. Draft/recommend: produce the next action with source-backed reasoning.
+5. Approval gate: ask before sending outreach, changing CRM data, enrolling in a
+   sequence, creating a task, or writing back to a system of record.
+6. Write back: after approval, update the chosen system and include the record ID,
+   source fields, and timestamp in the response.
+7. Learn: summarize the outcome signal that should improve the next run.
+
+Bias toward the patterns from the Deepline x Exa GTM + AI talks:
+- LangChain: approval loops and traceable agent reasoning.
+- Exa: search should return workflow-ready context, not generic link dumps.
+- Composio: tool use needs auth, scopes, and execution boundaries.
+- AssemblyAI: voice/conversation agents need persistent context before action.
+- Deepline: the data layer and writeback loop are usually the bottleneck.
+"""
+
 _BULK_LIST_TERMS = ("csv", "list", "prospect", "prospects", "contacts", "accounts")
 _BULK_ACTION_TERMS = ("build", "create", "find", "source", "generate")
 _BULK_COUNT_TERMS = ("5", "10", "20", "25", "50", "100", "bulk", "batch")
+
+_PRODUCTION_AGENT_TERMS = (
+    "agent",
+    "agents",
+    "workflow",
+    "writeback",
+    "write back",
+    "approval",
+    "approve",
+    "crm",
+    "salesforce",
+    "hubspot",
+    "sequence",
+    "outreach",
+    "voice",
+    "call",
+    "lead magnet",
+    "build kit",
+)
 
 
 def _looks_like_bulk_prospect_list(message: str) -> bool:
@@ -115,8 +156,28 @@ def _with_bulk_prospecting_guidance(message: str) -> str:
     return f"{BULK_PROSPECT_LIST_INSTRUCTIONS}\n\nUser request:\n{message}"
 
 
+def _looks_like_production_gtm_agent_request(message: str) -> bool:
+    text = message.lower()
+    return any(term in text for term in _PRODUCTION_AGENT_TERMS)
+
+
+def _with_production_gtm_agent_guidance(message: str) -> str:
+    if not _looks_like_production_gtm_agent_request(message):
+        return message
+    if "Production GTM agent requests must use this operating loop" in message:
+        return message
+    return f"{PRODUCTION_GTM_AGENT_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
 def _chat_payload(req: ChatRequest) -> dict[str, Any]:
-    prompt = _with_bulk_prospecting_guidance(req.message)
+    if _looks_like_bulk_prospect_list(req.message):
+        prompt = (
+            f"{BULK_PROSPECT_LIST_INSTRUCTIONS}\n\n"
+            f"{PRODUCTION_GTM_AGENT_INSTRUCTIONS}\n\n"
+            f"User request:\n{req.message}"
+        )
+    else:
+        prompt = _with_production_gtm_agent_guidance(req.message)
     messages = (
         [{"role": m.role, "content": m.content} for m in req.messages]
         if req.messages and prompt == req.message

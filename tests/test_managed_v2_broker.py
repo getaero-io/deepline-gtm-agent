@@ -69,6 +69,7 @@ def test_bulk_prospect_requests_get_native_v2_list_guidance():
 
     assert payload["prompt"].startswith("Bulk prospect/list requests")
     assert "native v2 list-building workflow" in payload["prompt"]
+    assert "Production GTM agent requests must use this operating loop" in payload["prompt"]
     assert "pilot/sample first" in payload["messages"][0]["content"]
     assert payload["messages"][0]["role"] == "user"
 
@@ -81,3 +82,35 @@ def test_one_off_prospect_requests_do_not_get_bulk_guidance():
     assert payload["prompt"] == "Find the LinkedIn URL for Jensen Huang at NVIDIA."
     assert payload["messages"][0]["role"] == "user"
     assert "native v2 list-building workflow" not in payload["messages"][0]["content"]
+
+
+def test_agent_workflow_requests_get_production_operating_loop():
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    payload = _chat_payload(
+        ChatRequest(
+            message=(
+                "Build a GTM agent that researches accounts, drafts outreach, "
+                "asks for approval, and writes approved updates back to Salesforce."
+            )
+        )
+    )
+
+    content = payload["messages"][0]["content"]
+    assert content.startswith("Production GTM agent requests must use this operating loop")
+    assert "Approval gate" in content
+    assert "Write back" in content
+    assert "LangChain: approval loops" in content
+    assert "Exa: search should return workflow-ready context" in content
+    assert "Composio: tool use needs auth" in content
+    assert "AssemblyAI: voice/conversation agents" in content
+
+
+def test_legacy_prompt_contains_event_agent_patterns():
+    from deepline_gtm_agent.prompts import GTM_SYSTEM_PROMPT
+
+    assert "Production GTM agent loop" in GTM_SYSTEM_PROMPT
+    assert "LangChain: approval loops" in GTM_SYSTEM_PROMPT
+    assert "Exa: search returns workflow-ready context" in GTM_SYSTEM_PROMPT
+    assert "Composio: tool use needs auth" in GTM_SYSTEM_PROMPT
+    assert "AssemblyAI: voice/conversation agents" in GTM_SYSTEM_PROMPT

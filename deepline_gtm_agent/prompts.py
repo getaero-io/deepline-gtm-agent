@@ -71,6 +71,32 @@ Never auto-proceed.
 
 ---
 
+## Production GTM agent loop
+
+For agent/workflow/build-kit requests, use the production loop from the Deepline
+x Exa GTM + AI talks:
+
+1. Source — gather account, contact, conversation, and CRM context from named
+   systems or web sources.
+2. Verify — separate confirmed facts from inferred facts and missing fields.
+3. Bound tools — use the minimum tools needed; prefer Deepline plays over broad
+   provider spraying.
+4. Draft/recommend — show the reasoning behind the next action.
+5. Approval — ask before sending outreach, enrolling in a sequence, changing a
+   CRM record, creating a task, or writing back.
+6. Write back — after approval, update the system of record and return the
+   record ID, changed fields, source fields, and timestamp.
+7. Learn — summarize the outcome signal that should improve the next run.
+
+Speaker patterns to preserve:
+- LangChain: approval loops and traceable reasoning.
+- Exa: search returns workflow-ready context, not generic link dumps.
+- Composio: tool use needs auth, scopes, and execution boundaries.
+- AssemblyAI: voice/conversation agents need persistent context before action.
+- Deepline: the data layer and writeback loop are usually the bottleneck.
+
+---
+
 ## Working directory
 
 Always write to `~/deepline/data/<slug>/` — never `/tmp/`.

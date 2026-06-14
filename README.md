@@ -38,6 +38,26 @@ The agent handles common GTM workflows with Deepline's v2 tool catalog and API:
 
 Responses should include sources, provider outcomes, and a clear next step. The agent should state data gaps instead of inventing missing emails, titles, or company facts.
 
+## GTM Agent Build Kit
+
+This repo also includes the build-kit version of the Deepline x Exa GTM + AI talks:
+
+- LangChain pattern: approval loops and traceable reasoning
+- Exa pattern: search as workflow-ready context, not a link dump
+- Composio pattern: scoped tools, auth boundaries, and controlled execution
+- AssemblyAI pattern: conversation context before action
+- Deepline pattern: source, verify, enrich, approve, write back, learn
+
+Start here: [docs/gtm-agent-build-kit.md](docs/gtm-agent-build-kit.md).
+
+The practical loop:
+
+```
+source -> verify -> bound tools -> draft/recommend -> approve -> write back -> learn
+```
+
+For build-agent, CRM writeback, outreach, voice/call, and bulk-list requests, the broker injects this operating loop before calling Deepline native chat.
+
 ## Architecture
 
 ```

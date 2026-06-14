@@ -4,6 +4,68 @@ Copy-paste ready prompts for the most common GTM workflows.
 
 ---
 
+## Workflow 0 — Production GTM Agent Build Kit
+
+Trigger: you want an agent workflow that can actually run inside GTM without embarrassing you in Salesforce, Slack, or a customer's inbox.
+
+```
+Build a GTM agent that researches accounts, drafts outreach, asks for approval,
+and writes approved updates back to Salesforce.
+
+Use this loop:
+1. Source account/contact context
+2. Verify what is confirmed vs. inferred
+3. Use the minimum tools needed
+4. Draft the next best action
+5. Ask before sending, sequencing, task creation, or CRM writeback
+6. Write back only after approval
+7. Summarize what should improve the next run
+```
+
+```
+Create a lead-magnet agent for a GTM + AI event.
+
+Input:
+- target account domain
+- target persona
+- event topic
+
+Return:
+- source-backed account/persona signals
+- one strong lead-magnet angle
+- a short LinkedIn DM
+- a short email opener
+- missing fields
+- approval question before CRM writeback or outreach enrollment
+```
+
+```
+Turn this call transcript into a GTM follow-up agent output.
+
+Do not make generic notes.
+
+Return:
+- buyer intent
+- objections
+- promised follow-ups
+- CRM field diffs
+- recommended next step
+- draft follow-up
+- approval question before creating tasks or updating CRM
+```
+
+```
+Research linear.app using only web/company research tools.
+
+Do not enrich contacts.
+Do not create CRM records.
+Do not enroll anyone in outreach.
+
+Return source-backed GTM signals and the next suggested workflow.
+```
+
+---
+
 ## Workflow 1 — Inbound Lead Processing
 
 Trigger: new signup, form fill, or CRM entry. Agent researches and drafts outreach.
