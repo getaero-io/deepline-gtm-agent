@@ -234,6 +234,56 @@ WORKFLOW_PRESETS: dict[str, dict[str, Any]] = {
             "outreach send",
         ],
     },
+    "snowflake_query_agent": {
+        "title": "Snowflake query agent",
+        "speaker_pattern": "LangChain / Vishnu Suresh + Deepline / Jai Toor",
+        "why": (
+            "Transcript-derived GTM agents worked better when trusted business "
+            "context landed in a warehouse and the agent could answer qualitative "
+            "questions with SQL-like access. This preset keeps that power read-only, "
+            "scoped, and explainable."
+        ),
+        "best_for": [
+            "account intelligence from warehouse tables",
+            "product usage and activation questions",
+            "renewal or churn risk investigation",
+            "territory and pipeline analysis",
+            "meeting-transcript signal lookup",
+        ],
+        "prompt": (
+            "Answer this GTM question using Snowflake/warehouse context. First "
+            "identify the likely tables and fields, then propose the SQL before "
+            "running it. Use read-only SELECT queries only. Limit exploratory "
+            "queries, explain joins and filters, return the result with source "
+            "tables, and ask for approval before any writeback or downstream action."
+        ),
+        "suggested_tool_bounds": {
+            "enabledToolIds": [
+                "deeplineagent",
+                "snowflake_query",
+                "snowflake_execute_query",
+            ],
+            "maxToolCalls": 8,
+            "read_only": True,
+            "side_effects_require_approval": True,
+        },
+        "expected_output": [
+            "interpreted business question",
+            "tables/fields used",
+            "proposed SQL",
+            "query result summary",
+            "source table notes",
+            "caveats or missing fields",
+            "recommended next action",
+            "approval question before CRM/outreach writeback",
+        ],
+        "human_approval_required_for": [
+            "non-SELECT queries",
+            "CRM writeback",
+            "outreach or task creation",
+            "exporting sensitive row-level data",
+        ],
+    },
 }
 
 

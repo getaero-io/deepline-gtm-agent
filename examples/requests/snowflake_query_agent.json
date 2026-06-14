@@ -1,0 +1,5 @@
+{
+  "message": "Use Snowflake/warehouse context to answer: which accounts had product usage drop by more than 30% in the last 14 days and have renewals in the next 90 days? First identify likely tables/fields, propose the SQL, and use read-only SELECT queries only. Return caveats and ask before CRM writeback.",
+  "enabledToolIds": ["deeplineagent", "snowflake_query", "snowflake_execute_query"],
+  "maxToolCalls": 8
+}

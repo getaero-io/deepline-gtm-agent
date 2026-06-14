@@ -116,6 +116,26 @@ Bias toward the patterns from the Deepline x Exa GTM + AI talks:
 - Deepline: the data layer and writeback loop are usually the bottleneck.
 """
 
+SNOWFLAKE_QUERY_AGENT_INSTRUCTIONS = """\
+Snowflake/warehouse query requests must use this read-only operating loop:
+
+1. Interpret the business question and restate the metric/entity/time window.
+2. Identify likely tables and fields before querying.
+3. Propose the SQL before execution when the schema or metric definition is ambiguous.
+4. Use read-only SELECT queries only. Never run INSERT, UPDATE, DELETE, MERGE,
+   CREATE, DROP, ALTER, COPY, GRANT, or external stage operations.
+5. Limit exploratory queries and avoid exporting unnecessary row-level data.
+6. Explain joins, filters, and caveats in the result.
+7. Ask for approval before CRM writeback, outreach, task creation, or sharing
+   sensitive rows outside the system.
+
+Bias toward warehouse-backed GTM questions from the talks:
+- account owner, activation, product usage, renewal/churn risk
+- customer cloud/provider signals extracted from calls
+- weekly account intelligence digests
+- pipeline or territory prioritization
+"""
+
 _BULK_LIST_TERMS = ("csv", "list", "prospect", "prospects", "contacts", "accounts")
 _BULK_ACTION_TERMS = ("build", "create", "find", "source", "generate")
 _BULK_COUNT_TERMS = ("5", "10", "20", "25", "50", "100", "bulk", "batch")
@@ -137,6 +157,25 @@ _PRODUCTION_AGENT_TERMS = (
     "call",
     "lead magnet",
     "build kit",
+)
+
+_SNOWFLAKE_QUERY_SOURCE_TERMS = (
+    "snowflake",
+    "warehouse",
+    "sql",
+    "data warehouse",
+)
+
+_SNOWFLAKE_QUERY_ANALYTIC_TERMS = (
+    "query",
+    "table",
+    "tables",
+    "activation",
+    "product usage",
+    "churn",
+    "renewal",
+    "pipeline",
+    "account owner",
 )
 
 
@@ -170,6 +209,21 @@ def _with_production_gtm_agent_guidance(message: str) -> str:
     return f"{PRODUCTION_GTM_AGENT_INSTRUCTIONS}\n\nUser request:\n{message}"
 
 
+def _looks_like_snowflake_query_request(message: str) -> bool:
+    text = message.lower()
+    return any(term in text for term in _SNOWFLAKE_QUERY_SOURCE_TERMS) and any(
+        term in text for term in _SNOWFLAKE_QUERY_ANALYTIC_TERMS
+    )
+
+
+def _with_snowflake_query_guidance(message: str) -> str:
+    if not _looks_like_snowflake_query_request(message):
+        return message
+    if "Snowflake/warehouse query requests must use this read-only operating loop" in message:
+        return message
+    return f"{SNOWFLAKE_QUERY_AGENT_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
 def _chat_payload(req: ChatRequest) -> dict[str, Any]:
     if _looks_like_bulk_prospect_list(req.message):
         prompt = (
@@ -178,7 +232,9 @@ def _chat_payload(req: ChatRequest) -> dict[str, Any]:
             f"User request:\n{req.message}"
         )
     else:
-        prompt = _with_production_gtm_agent_guidance(req.message)
+        prompt = _with_snowflake_query_guidance(
+            _with_production_gtm_agent_guidance(req.message)
+        )
     messages = (
         [{"role": m.role, "content": m.content} for m in req.messages]
         if req.messages and prompt == req.message

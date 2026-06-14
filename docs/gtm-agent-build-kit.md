@@ -33,6 +33,8 @@ The LangChain pattern is not "let an agent blast prospects." It is:
 
 In this repo, that means agent and bulk-workflow requests are wrapped with the production operating loop in `managed_agent/server.py`.
 
+LangChain also showed the practical BI side of adoption: reps asked basic account and pipeline questions in chat, and the agent became useful when it could answer from trusted systems instead of making the rep open another dashboard. For this repo, that maps to the Snowflake query agent: read-only warehouse context, SQL proposed before execution, and approval before any writeback.
+
 ### Exa: search must become workflow context
 
 Search is not useful when it returns ten blue links and makes the rep do the work.
@@ -173,6 +175,33 @@ Use this with:
 }
 ```
 
+### Snowflake Query Agent
+
+```text
+Answer this GTM question using Snowflake/warehouse context.
+
+First:
+- restate the metric, entity, and time window
+- identify likely tables and fields
+- propose the SQL before running it
+
+Rules:
+- read-only SELECT queries only
+- limit exploratory queries
+- explain joins, filters, and caveats
+- ask before CRM writeback, outreach, task creation, or sharing sensitive rows
+```
+
+Use this with:
+
+```json
+{
+  "message": "Use Snowflake/warehouse context to answer: which accounts had product usage drop by more than 30% in the last 14 days and have renewals in the next 90 days?",
+  "enabledToolIds": ["deeplineagent", "snowflake_query", "snowflake_execute_query"],
+  "maxToolCalls": 8
+}
+```
+
 ## API Examples
 
 ### Pick a starter workflow
@@ -180,6 +209,7 @@ Use this with:
 ```bash
 curl http://localhost:8000/workflow-presets
 curl http://localhost:8000/workflow-presets/web_context_research
+curl http://localhost:8000/workflow-presets/snowflake_query_agent
 ```
 
 Use these when you do not know which prompt to start from. The presets include:
@@ -200,6 +230,16 @@ curl -X POST http://localhost:8000/chat \
 ```
 
 The broker will prepend the production GTM agent operating loop automatically.
+
+### Warehouse-backed GTM question
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  --data @examples/requests/snowflake_query_agent.json
+```
+
+The broker will prepend the Snowflake read-only operating loop automatically when a request asks for warehouse/SQL context.
 
 ### Bounded tools
 

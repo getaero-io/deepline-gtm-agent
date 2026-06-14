@@ -12,6 +12,7 @@ This doc maps transcript lessons to concrete repo usability decisions.
 |---|---|---|
 | LangChain started with one constrained inbound problem, then expanded. | Users do not know what workflow to start with. | Added `/workflow-presets` with six starter workflows. |
 | LangChain saw adoption jump when the agent became two-way in Slack and useful for basic BI questions. | The repo felt like an agent backend, not an operator tool. | Presets now include account digest, Slack/chat, and approval workflows. |
+| LangChain's rep-facing agent became more useful when warehouse questions could be answered in the flow of work. | Users need a safe way to ask Snowflake questions without turning the agent into an unrestricted SQL runner. | Added a Snowflake query agent preset with read-only SELECT guidance, SQL proposal, source-table notes, and approval before downstream action. |
 | LangChain learned from rep edits through append-only memory and tracked tool-call trajectories in evals. | Users need examples of what the agent should remember and test. | Presets include expected output, learning signals, and approval rules. |
 | AssemblyAI needed control over prompts, tools, RAG, docs, and escalation. | Users need a clear support/onboarding workflow, not just generic chat. | Added a self-serve support/onboarding preset with escalation boundaries. |
 | AssemblyAI keeps docs as current markdown and streams visible progress. | Users need the repo docs to be agent-readable and copy-pasteable. | Added Notion-ready markdown, request templates, and output shapes. |
@@ -71,6 +72,7 @@ No 40-minute philosophical onboarding. We are all tired.
 | Turn web search into source-backed GTM context | `web_context_research` |
 | Scope tools/actions before an agent touches CRM/Gmail/Slack | `bounded_tool_action` |
 | Combine first-party + third-party data into an approved action | `closed_loop_gtm_workflow` |
+| Ask warehouse-backed GTM questions safely | `snowflake_query_agent` |
 
 ## What Good Usability Looks Like
 
@@ -102,4 +104,3 @@ These are the obvious next cuts:
 - Add eval fixtures for the expected output shape of each preset.
 - Add a `/workflow-presets/{id}/curl` helper if users keep asking for examples.
 - Add docs sync guidance so support/onboarding agents can read current markdown like AssemblyAI's Joey pattern.
-

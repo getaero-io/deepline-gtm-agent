@@ -85,6 +85,7 @@ In this repo:
 - `managed_agent/server.py` injects the production operating loop for agent/workflow requests.
 - `tests/test_managed_v2_broker.py` checks that approval/writeback guidance is included.
 - `docs/gtm-agent-build-kit.md` includes starter prompts that force approval before CRM or outreach actions.
+- `workflow-presets/snowflake_query_agent` covers the BI-in-chat pattern: read-only warehouse questions, proposed SQL, source tables, and approval before downstream action.
 
 ### Prompt to steal
 
@@ -373,6 +374,7 @@ Pull context from the right places:
 - transcript/call system
 - previous interactions
 - product usage
+- Snowflake or warehouse tables
 
 Output should name the source.
 
@@ -478,6 +480,7 @@ Before calling something a GTM agent, answer these:
 | `docs/gtm-agent-build-kit.md` | Short practical guide and prompt pack |
 | `docs/notion-gtm-agent-field-guide.md` | Long Notion-ready guide |
 | `examples.md` | Copy-paste workflows |
+| `examples/requests/snowflake_query_agent.json` | Safe warehouse-backed GTM question template |
 | `managed_agent/server.py` | Injects production GTM loop into relevant requests |
 | `tests/test_managed_v2_broker.py` | Prevents losing approval/writeback guidance |
 | `deepline_gtm_agent/prompts.py` | Mirrors the loop for the legacy Deep Agents path |
@@ -503,4 +506,3 @@ source -> verify -> bound tools -> draft -> approve -> write back -> learn
 
 Comment AGENTS and I'll send it over.
 ```
-

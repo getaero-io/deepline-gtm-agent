@@ -23,6 +23,14 @@ curl -X POST http://localhost:8000/chat \
   --data @examples/requests/web_context_research.json
 ```
 
+Run the warehouse-backed query agent:
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  --data @examples/requests/snowflake_query_agent.json
+```
+
 ```
 Build a GTM agent that researches accounts, drafts outreach, asks for approval,
 and writes approved updates back to Salesforce.
@@ -77,6 +85,14 @@ Do not create CRM records.
 Do not enroll anyone in outreach.
 
 Return source-backed GTM signals and the next suggested workflow.
+```
+
+```
+Use Snowflake/warehouse context to answer which accounts had product usage drop
+by more than 30% in the last 14 days and have renewals in the next 90 days.
+
+First identify likely tables and fields, then propose the SQL before running it.
+Use read-only SELECT queries only. Return caveats and ask before CRM writeback.
 ```
 
 ---

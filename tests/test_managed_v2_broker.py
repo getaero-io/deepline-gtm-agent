@@ -133,6 +133,7 @@ def test_workflow_presets_are_discoverable(monkeypatch):
         "web_context_research",
         "bounded_tool_action",
         "closed_loop_gtm_workflow",
+        "snowflake_query_agent",
     }.issubset(preset_ids)
 
 
@@ -151,6 +152,51 @@ def test_workflow_preset_includes_prompt_tool_bounds_and_output_shape(monkeypatc
     assert "expected_output" in preset
     assert "source-backed claims" in preset["expected_output"]
     assert preset["suggested_tool_bounds"]["maxToolCalls"] == 6
+
+
+def test_snowflake_workflow_preset_is_read_only_and_bounded(monkeypatch):
+    monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
+
+    from managed_agent.server import app
+
+    response = TestClient(app).get("/workflow-presets/snowflake_query_agent")
+
+    assert response.status_code == 200
+    preset = response.json()
+    assert preset["title"] == "Snowflake query agent"
+    assert preset["suggested_tool_bounds"]["read_only"] is True
+    assert preset["suggested_tool_bounds"]["maxToolCalls"] == 8
+    assert "snowflake_query" in preset["suggested_tool_bounds"]["enabledToolIds"]
+    assert "proposed SQL" in preset["expected_output"]
+    assert "non-SELECT queries" in preset["human_approval_required_for"]
+
+
+def test_snowflake_requests_get_read_only_operating_loop():
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    payload = _chat_payload(
+        ChatRequest(
+            message=(
+                "Use Snowflake to query product usage for accounts at risk of churn."
+            )
+        )
+    )
+
+    content = payload["messages"][0]["content"]
+    assert content.startswith(
+        "Snowflake/warehouse query requests must use this read-only operating loop"
+    )
+    assert "Use read-only SELECT queries only" in content
+    assert "Never run INSERT" in content
+    assert "approval before CRM writeback" in content
+
+
+def test_plain_pipeline_questions_do_not_get_snowflake_guidance():
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    payload = _chat_payload(ChatRequest(message="Summarize my pipeline risks this week."))
+
+    assert "Snowflake/warehouse query requests" not in payload["messages"][0]["content"]
 
 
 def test_unknown_workflow_preset_404s(monkeypatch):

@@ -47,6 +47,7 @@ This repo also includes the build-kit version of the Deepline x Exa GTM + AI tal
 - Composio pattern: scoped tools, auth boundaries, and controlled execution
 - AssemblyAI pattern: conversation context before action
 - Deepline pattern: source, verify, enrich, approve, write back, learn
+- Snowflake pattern: read-only warehouse questions before CRM or outreach action
 
 Start here:
 
@@ -67,6 +68,7 @@ The broker also exposes transcript-derived starter workflows:
 ```bash
 curl http://localhost:8000/workflow-presets
 curl http://localhost:8000/workflow-presets/inbound_lead_approval
+curl http://localhost:8000/workflow-presets/snowflake_query_agent
 ```
 
 ## Architecture
