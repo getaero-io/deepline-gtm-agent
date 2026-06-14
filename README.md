@@ -48,7 +48,10 @@ This repo also includes the build-kit version of the Deepline x Exa GTM + AI tal
 - AssemblyAI pattern: conversation context before action
 - Deepline pattern: source, verify, enrich, approve, write back, learn
 
-Start here: [docs/gtm-agent-build-kit.md](docs/gtm-agent-build-kit.md).
+Start here:
+
+- [docs/gtm-agent-build-kit.md](docs/gtm-agent-build-kit.md) — short guide, prompts, and API examples
+- [docs/notion-gtm-agent-field-guide.md](docs/notion-gtm-agent-field-guide.md) — long Notion-ready field guide with speaker learnings
 
 The practical loop:
 

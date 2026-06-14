@@ -2,6 +2,9 @@
 
 This repo is the practical version of the Deepline x Exa GTM + AI talks.
 
+For the long Notion-ready field guide with speaker-by-speaker learnings, see
+[`docs/notion-gtm-agent-field-guide.md`](notion-gtm-agent-field-guide.md).
+
 The point is not "AI writes better emails." The useful pattern is:
 
 1. Source the context.
@@ -233,4 +236,3 @@ Here are 10 exciting personalization ideas.
 ```
 
 That is not an agent. That is a content blender with API access.
-
