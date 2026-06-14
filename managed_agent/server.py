@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
 from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
+from managed_agent.workflow_presets import get_workflow_preset, list_workflow_presets
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -215,6 +216,21 @@ async def health():
         "slack": "configured" if os.environ.get("SLACK_BOT_TOKEN") else "not configured",
     }
     return JSONResponse(body, status_code=200 if os.environ.get("DEEPLINE_API_KEY") else 503)
+
+
+@app.get("/workflow-presets")
+async def workflow_presets():
+    """List transcript-derived starter workflows for GTM agents."""
+    return {"presets": list_workflow_presets()}
+
+
+@app.get("/workflow-presets/{preset_id}")
+async def workflow_preset(preset_id: str):
+    """Return a full workflow preset with prompt, tool bounds, and output shape."""
+    preset = get_workflow_preset(preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail="Unknown workflow preset")
+    return preset
 
 
 @app.get("/", response_class=HTMLResponse)

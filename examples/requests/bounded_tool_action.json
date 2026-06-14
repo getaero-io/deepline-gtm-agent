@@ -1,0 +1,4 @@
+{
+  "message": "Before using any tool, state the tool, why it is needed, whether it creates a side effect, and whether approval is required. Use the minimum tool set and return an audit trail.\n\nTask: find whether this account exists in HubSpot and recommend the next safe action before creating or changing anything.\n\nAccount: Acme Corp, acme.example",
+  "maxToolCalls": 5
+}

@@ -1,0 +1,4 @@
+{
+  "message": "Combine first-party and third-party context, recommend the next GTM action, ask for approval, and after approval write back the result and the learning signal. Report provider misses and marginal cost signals.\n\nUse case: personalize event follow-up for a high-intent attendee who checked in, visited pricing, and has recent LinkedIn posts about AI agents.",
+  "maxToolCalls": 10
+}

@@ -52,6 +52,7 @@ Start here:
 
 - [docs/gtm-agent-build-kit.md](docs/gtm-agent-build-kit.md) — short guide, prompts, and API examples
 - [docs/notion-gtm-agent-field-guide.md](docs/notion-gtm-agent-field-guide.md) — long Notion-ready field guide with speaker learnings
+- [docs/transcript-learnings-usability.md](docs/transcript-learnings-usability.md) — what the transcripts changed about repo usability
 
 The practical loop:
 
@@ -60,6 +61,13 @@ source -> verify -> bound tools -> draft/recommend -> approve -> write back -> l
 ```
 
 For build-agent, CRM writeback, outreach, voice/call, and bulk-list requests, the broker injects this operating loop before calling Deepline native chat.
+
+The broker also exposes transcript-derived starter workflows:
+
+```bash
+curl http://localhost:8000/workflow-presets
+curl http://localhost:8000/workflow-presets/inbound_lead_approval
+```
 
 ## Architecture
 

@@ -1,0 +1,5 @@
+{
+  "message": "Research linear.app from web sources. Return source-backed claims, freshness, relevance to GTM, confidence, missing context, and the next safe workflow. Do not enrich contacts or write to CRM.",
+  "enabledToolIds": ["deeplineagent", "firecrawl_search", "exa_search"],
+  "maxToolCalls": 6
+}

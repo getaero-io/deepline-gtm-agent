@@ -8,6 +8,21 @@ Copy-paste ready prompts for the most common GTM workflows.
 
 Trigger: you want an agent workflow that can actually run inside GTM without embarrassing you in Salesforce, Slack, or a customer's inbox.
 
+Discover transcript-derived starter workflows:
+
+```bash
+curl http://localhost:8000/workflow-presets
+curl http://localhost:8000/workflow-presets/closed_loop_gtm_workflow
+```
+
+Run a saved request template:
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  --data @examples/requests/web_context_research.json
+```
+
 ```
 Build a GTM agent that researches accounts, drafts outreach, asks for approval,
 and writes approved updates back to Salesforce.

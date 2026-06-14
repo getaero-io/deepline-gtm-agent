@@ -1,0 +1,4 @@
+{
+  "message": "Research this inbound lead, decide whether we should act, draft the next best outreach, and ask for rep approval before sending or CRM writeback. Show sources, reasons not to act, and missing context.\n\nLead:\n- Name: Sarah Chen\n- Company: Figma\n- Title: Head of Revenue Operations\n- Email: sarah.chen@example.com",
+  "maxToolCalls": 8
+}

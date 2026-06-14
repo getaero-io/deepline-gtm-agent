@@ -4,6 +4,8 @@ This repo is the practical version of the Deepline x Exa GTM + AI talks.
 
 For the long Notion-ready field guide with speaker-by-speaker learnings, see
 [`docs/notion-gtm-agent-field-guide.md`](notion-gtm-agent-field-guide.md).
+For the transcript-to-usability changelog, see
+[`docs/transcript-learnings-usability.md`](transcript-learnings-usability.md).
 
 The point is not "AI writes better emails." The useful pattern is:
 
@@ -172,6 +174,20 @@ Use this with:
 ```
 
 ## API Examples
+
+### Pick a starter workflow
+
+```bash
+curl http://localhost:8000/workflow-presets
+curl http://localhost:8000/workflow-presets/web_context_research
+```
+
+Use these when you do not know which prompt to start from. The presets include:
+
+- prompt
+- suggested tool bounds
+- expected output
+- approval requirements
 
 ### Production agent request
 

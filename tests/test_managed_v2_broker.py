@@ -114,3 +114,50 @@ def test_legacy_prompt_contains_event_agent_patterns():
     assert "Exa: search returns workflow-ready context" in GTM_SYSTEM_PROMPT
     assert "Composio: tool use needs auth" in GTM_SYSTEM_PROMPT
     assert "AssemblyAI: voice/conversation agents" in GTM_SYSTEM_PROMPT
+
+
+def test_workflow_presets_are_discoverable(monkeypatch):
+    monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
+
+    from managed_agent.server import app
+
+    response = TestClient(app).get("/workflow-presets")
+
+    assert response.status_code == 200
+    presets = response.json()["presets"]
+    preset_ids = {preset["id"] for preset in presets}
+    assert {
+        "inbound_lead_approval",
+        "account_digest",
+        "self_serve_support_agent",
+        "web_context_research",
+        "bounded_tool_action",
+        "closed_loop_gtm_workflow",
+    }.issubset(preset_ids)
+
+
+def test_workflow_preset_includes_prompt_tool_bounds_and_output_shape(monkeypatch):
+    monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
+
+    from managed_agent.server import app
+
+    response = TestClient(app).get("/workflow-presets/web_context_research")
+
+    assert response.status_code == 200
+    preset = response.json()
+    assert preset["speaker_pattern"] == "Exa / Scott Langille"
+    assert "prompt" in preset
+    assert "suggested_tool_bounds" in preset
+    assert "expected_output" in preset
+    assert "source-backed claims" in preset["expected_output"]
+    assert preset["suggested_tool_bounds"]["maxToolCalls"] == 6
+
+
+def test_unknown_workflow_preset_404s(monkeypatch):
+    monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
+
+    from managed_agent.server import app
+
+    response = TestClient(app).get("/workflow-presets/nope")
+
+    assert response.status_code == 404
