@@ -2,6 +2,82 @@
 
 This guide deploys the Deepline v2 native agent/chat broker. It uses environment variables and the Deepline SDK/API, with no dependency on local Deepline CLI state.
 
+For the additive Eve reference implementation, use the "Eve on Vercel" section below. The Python broker remains the Railway/Slack path.
+
+## Eve on Vercel
+
+The Eve app lives in `eve_agent/` and is the fastest deploy path for an out-of-the-box Deepline GTM agent session server.
+
+### Local setup
+
+```bash
+cd eve_agent
+npm install
+cp .env.example .env
+```
+
+Set:
+
+```bash
+DEEPLINE_API_KEY="dlp_..."
+```
+
+Then configure model access through Vercel AI Gateway:
+
+```bash
+npx eve link
+```
+
+or set a direct provider key supported by Eve, such as `ANTHROPIC_API_KEY`.
+
+Run locally:
+
+```bash
+npm run dev
+```
+
+Verify in another terminal:
+
+```bash
+npm run smoke -- --host http://127.0.0.1:3000
+```
+
+### Deploy
+
+```bash
+cd eve_agent
+npx vercel
+```
+
+Set Vercel project environment variables:
+
+| Variable | Required | Description |
+|---|---|---|
+| `DEEPLINE_API_KEY` | Yes | Deepline v2 API key from [code.deepline.com](https://code.deepline.com) |
+| `DEEPLINE_API_BASE_URL` | Optional | Defaults to `https://code.deepline.com` |
+| `AI_GATEWAY_API_KEY` | Usually | Required unless the deployment uses Vercel OIDC/model auth |
+| `ANTHROPIC_API_KEY` | Optional | Direct-provider fallback |
+| `EVE_MODEL` | Optional | Model override, for example `anthropic/claude-sonnet-4.6` |
+
+After deployment:
+
+```bash
+cd eve_agent
+npm run smoke -- --host https://<your-vercel-url>
+```
+
+### Eve verification
+
+```bash
+cd eve_agent
+npm test
+npm run typecheck
+npm run build
+npm run eval -- smoke
+```
+
+The unit tests and build are local checks. Evals and smoke sessions require configured model credentials.
+
 ## Railway
 
 ### CLI setup

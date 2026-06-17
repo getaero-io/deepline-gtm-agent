@@ -47,5 +47,6 @@ managed_agent/.agent_config.json
 eve_agent/node_modules/
 eve_agent/.eve/
 eve_agent/.vercel/
+eve_agent/.workflow-data/
 eve_agent/dist/
 eve_agent/*.tsbuildinfo
