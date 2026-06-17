@@ -42,3 +42,10 @@ secrets.json
 # Local eval/debug output — may contain real contact data
 tmp/
 managed_agent/.agent_config.json
+
+# Eve / Node local artifacts
+eve_agent/node_modules/
+eve_agent/.eve/
+eve_agent/.vercel/
+eve_agent/dist/
+eve_agent/*.tsbuildinfo
