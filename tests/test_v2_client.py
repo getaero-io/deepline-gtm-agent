@@ -4,7 +4,12 @@ import asyncio
 import httpx
 
 from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
-from tests.run_evals import _tool_calls_from_native_stream_chunk, run_agent_hermes
+from tests.run_evals import (
+    ToolCallCapture,
+    _tool_calls_from_native_stream_chunk,
+    run_agent_hermes,
+    run_agent_http,
+)
 
 
 def test_execute_tool_uses_v2_tool_route():
@@ -88,7 +93,6 @@ def test_native_stream_tool_calls_are_captured_for_evals():
     assert calls[0].tool_id == "exa_search"
     assert calls[0].payload_keys == ["query"]
 
-
 def test_eval_runner_can_call_hermes_command():
     reply, calls = asyncio.run(
         run_agent_hermes(
@@ -100,3 +104,67 @@ def test_eval_runner_can_call_hermes_command():
 
     assert reply == "reply:hello"
     assert calls == []
+
+
+def test_native_stream_tool_input_available_events_are_captured_for_evals():
+    calls = _tool_calls_from_native_stream_chunk(
+        'data: {"type":"tool-input-available","toolName":"serper_google_search","input":{"query":"stripe","num":5}}\n\n'
+    )
+
+    assert len(calls) == 1
+    assert calls[0].tool_name == "deepline_call"
+    assert calls[0].tool_id == "serper_google_search"
+    assert calls[0].payload_keys == ["query", "num"]
+
+
+def test_http_eval_runner_streams_and_captures_tool_calls(monkeypatch):
+    seen = {}
+
+    class FakeStreamResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        async def aiter_text(self):
+            yield 'data: {"type":"tool-call","toolName":"exa_search","input":{"query":"stripe"}}\n\n'
+            yield 'data: {"type":"text-delta","textDelta":"hello"}\n\n'
+            yield "data: [DONE]\n\n"
+
+    class FakeStreamContext:
+        async def __aenter__(self):
+            return FakeStreamResponse()
+
+        async def __aexit__(self, *args):
+            return None
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        def stream(self, method, url, **kwargs):
+            seen["method"] = method
+            seen["url"] = url
+            seen["json"] = kwargs.get("json")
+            return FakeStreamContext()
+
+        async def post(self, *args, **kwargs):
+            raise AssertionError("HTTP eval runner should use /chat/stream")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    reply, calls = asyncio.run(
+        run_agent_http("research stripe", "https://agent.example", ToolCallCapture())
+    )
+
+    assert seen["method"] == "POST"
+    assert seen["url"] == "https://agent.example/chat/stream"
+    assert seen["json"]["message"] == "research stripe"
+    assert reply == "hello"
+    assert [c.tool_id for c in calls] == ["exa_search"]

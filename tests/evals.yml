@@ -81,8 +81,12 @@ evals:
     tags: [core, research]
     prompt: >
       Research stripe.com — tell me their headcount, funding, and what they do.
-    expect_tools_called:
-      - research_company
+    expect_tool_ids_called_any:
+      - discolike_run_company_research
+      - exa_company_search
+      - exa_search
+      - firecrawl_scrape
+      - serper_google_search
     expect_response_contains:
       - stripe
     expect_response_contains_any:
@@ -102,8 +106,9 @@ evals:
     tags: [core, enrichment]
     prompt: >
       Verify if the email john.smith@stripe.com is valid and safe to send to.
-    expect_tools_called:
-      - verify_email
+    expect_tool_ids_called_any:
+      - allegrow_validate
+      - leadmagic_email_validation
     expect_response_contains_any:
       - valid
       - invalid
@@ -114,8 +119,10 @@ evals:
     tags: [core, enrichment]
     prompt: >
       Find the LinkedIn URL for Jensen Huang at NVIDIA.
-    expect_tools_called:
-      - find_linkedin
+    expect_tool_ids_called_any:
+      - exa_search
+      - serper_google_search
+      - limadata_find_person_profiles
     expect_response_contains:
       - linkedin
 

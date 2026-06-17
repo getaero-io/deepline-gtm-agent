@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tags", help="Comma-separated tags to filter by (OR)")
     p.add_argument("--runs", type=int, default=1, help="Runs per eval (default 1)")
     p.add_argument("--no-live-api", action="store_true",
-                   help="Mock deepline_execute — fast, no API credits consumed")
+                   help="Use a canned native response — fast, no API credits consumed")
     p.add_argument("--url", help="Test deployed agent via HTTP instead of direct Python invoke")
     p.add_argument(
         "--hermes-command",
@@ -197,7 +197,12 @@ def _tool_calls_from_native_stream_chunk(chunk: str) -> list[ToolCallRecord]:
             continue
         if not isinstance(event, dict):
             continue
-        if event.get("type") not in {"tool-call", "tool_call"}:
+        if event.get("type") not in {
+            "tool-call",
+            "tool_call",
+            "tool-input-available",
+            "tool_input_available",
+        }:
             continue
         tool_name = event.get("toolName") or event.get("tool_name") or event.get("name")
         if not isinstance(tool_name, str) or not tool_name:
@@ -242,31 +247,40 @@ async def run_agent_http(
     capture: ToolCallCapture,
     verbose: bool = False,
 ) -> tuple[str, list[ToolCallRecord]]:
-    """Call the deployed agent via HTTP POST /chat and return (reply, [])."""
+    """Call the deployed agent via HTTP POST /chat/stream and return text + tool calls."""
     import httpx
+    from deepline_gtm_agent.v2_client import extract_text_from_stream_chunk
+
     api_key = os.environ.get("API_KEY", "")
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
+    parts: list[str] = []
+    calls: list[ToolCallRecord] = []
     async with httpx.AsyncClient(timeout=480) as client:
-        resp = await client.post(
-            f"{url.rstrip('/')}/chat",
+        async with client.stream(
+            "POST",
+            f"{url.rstrip('/')}/chat/stream",
             json={"message": prompt, "messages": [{"role": "user", "content": prompt}]},
             headers=headers,
-        )
+        ) as resp:
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = await resp.aread()
+                raise RuntimeError(
+                    f"HTTP {resp.status_code}: {body.decode(errors='replace')[:200]}"
+                ) from exc
+            async for chunk in resp.aiter_text():
+                parts.append(extract_text_from_stream_chunk(chunk))
+                calls.extend(_tool_calls_from_native_stream_chunk(chunk))
 
-    if resp.status_code != 200:
-        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-
-    body = resp.json()
-    reply = body.get("reply") or body.get("message") or ""
+    reply = "".join(parts)
     if verbose:
         print(f"\n  Reply: {reply[:300]}")
 
-    # We can't capture tool calls over HTTP — return empty list; tool assertions
-    # will be marked as SKIPPED by the caller.
-    return reply, []
+    return reply, calls
 
 
 async def run_agent_hermes(
@@ -335,7 +349,7 @@ def check_expectations(
 ) -> list[ExpectationResult]:
     """
     Evaluate all assertions against the agent reply and recorded tool calls.
-    Used for direct (non-HTTP) runs where tool call data is available.
+    Used when native stream tool-call data is available.
     """
     results: list[ExpectationResult] = []
     tool_names = {c.tool_name for c in calls}
@@ -437,11 +451,11 @@ def check_expectations_http(
     reply: str,
 ) -> list[ExpectationResult]:
     """
-    Evaluate assertions for HTTP mode runs.
+    Evaluate assertions for mock runs.
 
     Response assertions (contains, not_contains, regex) are checked normally.
     Tool assertions (expect_tools_called, expect_tool_ids_called, etc.) are
-    marked as SKIPPED because tool call data is not available over HTTP.
+    marked as SKIPPED because canned mock responses do not include tool calls.
     """
     results: list[ExpectationResult] = []
     reply_lower = reply.lower()
@@ -492,13 +506,13 @@ def check_expectations_http(
             skipped=False,
         ))
 
-    # --- Tool assertions — SKIPPED (can't verify over HTTP) ---
+    # --- Tool assertions — SKIPPED (mock mode has no tool stream) ---
 
     for tool in eval_def.get("expect_tools_called", []):
         results.append(ExpectationResult(
             f"tool_called:{tool}",
             True,
-            f"SKIPPED — tool routing not verifiable over HTTP",
+            f"SKIPPED — tool routing not verifiable in mock mode",
             skipped=True,
         ))
 
@@ -507,7 +521,7 @@ def check_expectations_http(
         results.append(ExpectationResult(
             f"tool_called_any:{any_tools}",
             True,
-            f"SKIPPED — tool routing not verifiable over HTTP",
+            f"SKIPPED — tool routing not verifiable in mock mode",
             skipped=True,
         ))
 
@@ -515,7 +529,7 @@ def check_expectations_http(
         results.append(ExpectationResult(
             f"tool_id_called:{tid}",
             True,
-            f"SKIPPED — tool routing not verifiable over HTTP",
+            f"SKIPPED — tool routing not verifiable in mock mode",
             skipped=True,
         ))
 
@@ -524,7 +538,7 @@ def check_expectations_http(
         results.append(ExpectationResult(
             f"tool_id_called_any:{any_ids}",
             True,
-            f"SKIPPED — tool routing not verifiable over HTTP",
+            f"SKIPPED — tool routing not verifiable in mock mode",
             skipped=True,
         ))
 
@@ -532,7 +546,7 @@ def check_expectations_http(
         results.append(ExpectationResult(
             f"tool_not_called:{tool}",
             True,
-            f"SKIPPED — tool routing not verifiable over HTTP",
+            f"SKIPPED — tool routing not verifiable in mock mode",
             skipped=True,
         ))
 
@@ -599,11 +613,10 @@ async def run_eval(
 
     duration = time.time() - t0
 
-    if http_url or mock_api or hermes_command:
-        # HTTP/mock/Hermes modes: response assertions checked, tool assertions skipped
+    if mock_api or hermes_command:
+        # Mock/Hermes modes: response assertions checked, tool assertions skipped.
         expectations = check_expectations_http(eval_def, reply)
     else:
-        # Direct mode: all assertions fully checked
         expectations = check_expectations(eval_def, reply, calls)
 
     # Count only non-skipped expectations toward pass/fail totals
