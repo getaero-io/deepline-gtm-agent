@@ -48,5 +48,6 @@ eve_agent/node_modules/
 eve_agent/.eve/
 eve_agent/.vercel/
 eve_agent/.workflow-data/
+eve_agent/.output/
 eve_agent/dist/
 eve_agent/*.tsbuildinfo
