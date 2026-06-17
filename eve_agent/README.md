@@ -95,6 +95,10 @@ After deployment, verify the live URL:
 npm run smoke -- --host https://<your-vercel-url>
 ```
 
+## Access Control
+
+The Eve web channel defaults to anonymous access so the reference app behaves like the current Python web chat and works immediately after deployment. For a private deployment, edit `agent/channels/eve.ts` and remove `none()` from the auth chain, or replace it with your application auth provider.
+
 ## Parity Surface
 
 The Eve port preserves the important Deepline GTM behavior:

@@ -78,6 +78,8 @@ npm run eval -- smoke
 
 The unit tests and build are local checks. Evals and smoke sessions require configured model credentials.
 
+The Eve web channel allows anonymous chat by default for parity with the current Python web UI. For a private deployment, remove `none()` from `eve_agent/agent/channels/eve.ts` or replace it with your own auth provider before deploying.
+
 ## Railway
 
 ### CLI setup
