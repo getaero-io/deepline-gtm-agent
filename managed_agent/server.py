@@ -12,6 +12,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import OrderedDict
@@ -20,6 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -29,9 +31,43 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from deepline_gtm_agent.formatting import md_to_slack, truncate_for_slack
 from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
+from managed_agent.workflow_presets import get_workflow_preset, list_workflow_presets
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 logger = logging.getLogger(__name__)
+
+UVICORN_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "()": "uvicorn.logging.DefaultFormatter",
+            "fmt": "%(levelprefix)s %(message)s",
+            "use_colors": None,
+        },
+        "access": {
+            "()": "uvicorn.logging.AccessFormatter",
+            "fmt": '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+        "access": {
+            "formatter": "access",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+    },
+}
 
 _API_KEY = os.environ.get("API_KEY", "")
 _bearer = HTTPBearer(auto_error=False)
@@ -93,10 +129,116 @@ is requested, return the artifact/status details Deepline produced and the next
 approval step before any full enrichment.
 """
 
+PRODUCTION_GTM_AGENT_INSTRUCTIONS = """\
+Production GTM agent requests must use this operating loop:
+
+1. Source: gather account/contact/context from named systems or web sources.
+2. Verify: state what is confirmed, what is inferred, and what is missing.
+3. Bound tools: use only the minimum tools needed; respect auth/scopes and do not
+   spray every provider when a focused workflow or Deepline play exists.
+4. Draft/recommend: produce the next action with source-backed reasoning.
+5. Approval gate: ask before sending outreach, changing CRM data, enrolling in a
+   sequence, creating a task, or writing back to a system of record.
+6. Write back: after approval, update the chosen system and include the record ID,
+   source fields, and timestamp in the response.
+7. Learn: summarize the outcome signal that should improve the next run.
+
+Bias toward production GTM agent patterns:
+- Approval loops and traceable reasoning before side effects.
+- Search should return workflow-ready context, not generic link dumps.
+- Tool use needs auth, scopes, execution boundaries, and audit trails.
+- Voice and conversation agents need persistent context before action.
+- The data layer and writeback loop are usually the bottleneck.
+"""
+
+SNOWFLAKE_QUERY_AGENT_INSTRUCTIONS = """\
+Snowflake/warehouse query requests must use this read-only operating loop:
+
+1. Interpret the business question and restate the metric/entity/time window.
+2. Identify likely tables and fields before querying.
+3. Propose the SQL before execution when the schema or metric definition is ambiguous.
+4. Use read-only SELECT queries only. Never run INSERT, UPDATE, DELETE, MERGE,
+   CREATE, DROP, ALTER, COPY, GRANT, or external stage operations.
+5. Limit exploratory queries and avoid exporting unnecessary row-level data.
+6. Explain joins, filters, and caveats in the result.
+7. Ask for approval before CRM writeback, outreach, task creation, or sharing
+   sensitive rows outside the system.
+
+Bias toward warehouse-backed GTM questions from the talks:
+- account owner, activation, product usage, renewal/churn risk
+- customer cloud/provider signals extracted from calls
+- weekly account intelligence digests
+- pipeline or territory prioritization
+"""
+
+EMAIL_VERIFICATION_INSTRUCTIONS = """\
+Email verification requests must execute a Deepline verifier before answering.
+Use deepline_call with one of these tool IDs: allegrow_validate or
+leadmagic_email_validation. Do not infer deliverability from search results or
+public web pages alone. Prefer Allegrow first, then fall back to LeadMagic only
+if needed. Report the provider used, the returned status, catch-all or risk
+signals if available, and a plain safe-to-send recommendation. If no verifier
+returns a result, say the email is unverified instead of guessing.
+"""
+
+EMAIL_VERIFICATION_TOOL_IDS = [
+    "allegrow_validate",
+    "leadmagic_email_validation",
+]
+
 _BULK_LIST_TERMS = ("csv", "list", "prospect", "prospects", "contacts", "accounts")
 _BULK_ACTION_TERMS = ("build", "create", "find", "source", "generate")
 _BULK_COUNT_TERMS = ("5", "10", "20", "25", "50", "100", "bulk", "batch")
 
+_PRODUCTION_AGENT_TERMS = (
+    "agent",
+    "agents",
+    "workflow",
+    "writeback",
+    "write back",
+    "approval",
+    "approve",
+    "crm",
+    "salesforce",
+    "hubspot",
+    "sequence",
+    "outreach",
+    "voice",
+    "call",
+    "lead magnet",
+    "build kit",
+)
+
+_SNOWFLAKE_QUERY_SOURCE_TERMS = (
+    "snowflake",
+    "warehouse",
+    "sql",
+    "data warehouse",
+)
+
+_SNOWFLAKE_QUERY_ANALYTIC_TERMS = (
+    "query",
+    "table",
+    "tables",
+    "activation",
+    "product usage",
+    "churn",
+    "renewal",
+    "pipeline",
+    "account owner",
+)
+
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}")
+_EMAIL_VERIFY_TERMS = (
+    "verify",
+    "valid",
+    "deliverable",
+    "safe to send",
+    "safe-to-send",
+    "email status",
+    "catch-all",
+    "catch all",
+)
 
 def _looks_like_bulk_prospect_list(message: str) -> bool:
     text = message.lower()
@@ -115,8 +257,67 @@ def _with_bulk_prospecting_guidance(message: str) -> str:
     return f"{BULK_PROSPECT_LIST_INSTRUCTIONS}\n\nUser request:\n{message}"
 
 
+def _looks_like_production_gtm_agent_request(message: str) -> bool:
+    text = message.lower()
+    return any(term in text for term in _PRODUCTION_AGENT_TERMS)
+
+
+def _with_production_gtm_agent_guidance(message: str) -> str:
+    if not _looks_like_production_gtm_agent_request(message):
+        return message
+    if "Production GTM agent requests must use this operating loop" in message:
+        return message
+    return f"{PRODUCTION_GTM_AGENT_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
+def _looks_like_snowflake_query_request(message: str) -> bool:
+    text = message.lower()
+    return any(term in text for term in _SNOWFLAKE_QUERY_SOURCE_TERMS) and any(
+        term in text for term in _SNOWFLAKE_QUERY_ANALYTIC_TERMS
+    )
+
+
+def _with_snowflake_query_guidance(message: str) -> str:
+    if not _looks_like_snowflake_query_request(message):
+        return message
+    if "Snowflake/warehouse query requests must use this read-only operating loop" in message:
+        return message
+    return f"{SNOWFLAKE_QUERY_AGENT_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
+def _looks_like_email_verification_request(message: str) -> bool:
+    text = message.lower()
+    return bool(_EMAIL_RE.search(message)) and any(term in text for term in _EMAIL_VERIFY_TERMS)
+
+
+def _email_for_verification(message: str) -> str | None:
+    if not _looks_like_email_verification_request(message):
+        return None
+    match = _EMAIL_RE.search(message)
+    return match.group(0) if match else None
+
+
+def _with_email_verification_guidance(message: str) -> str:
+    if not _looks_like_email_verification_request(message):
+        return message
+    if "Email verification requests must execute a Deepline verifier" in message:
+        return message
+    return f"{EMAIL_VERIFICATION_INSTRUCTIONS}\n\nUser request:\n{message}"
+
+
 def _chat_payload(req: ChatRequest) -> dict[str, Any]:
-    prompt = _with_bulk_prospecting_guidance(req.message)
+    if _looks_like_bulk_prospect_list(req.message):
+        prompt = (
+            f"{BULK_PROSPECT_LIST_INSTRUCTIONS}\n\n"
+            f"{PRODUCTION_GTM_AGENT_INSTRUCTIONS}\n\n"
+            f"User request:\n{req.message}"
+        )
+    else:
+        prompt = _with_email_verification_guidance(
+            _with_snowflake_query_guidance(
+                _with_production_gtm_agent_guidance(req.message)
+            )
+        )
     messages = (
         [{"role": m.role, "content": m.content} for m in req.messages]
         if req.messages and prompt == req.message
@@ -134,6 +335,190 @@ def _chat_payload(req: ChatRequest) -> dict[str, Any]:
     if req.model:
         payload["model"] = req.model
     return payload
+
+
+def _compact_tool_response(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _compact_tool_response(v) for k, v in value.items() if k not in {"billing"}}
+    if isinstance(value, list):
+        return [_compact_tool_response(v) for v in value[:5]]
+    return value
+
+
+def _email_verification_payload(result: dict[str, Any]) -> dict[str, Any]:
+    tool_response = result.get("toolResponse")
+    if isinstance(tool_response, dict):
+        raw = tool_response.get("raw")
+        if isinstance(raw, dict):
+            return raw
+        return tool_response
+    return result
+
+
+def _email_signal(payload: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _nested_email_signal(payload: dict[str, Any], *paths: tuple[str, ...]) -> Any:
+    for path in paths:
+        value: Any = payload
+        for key in path:
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _status_from_email_payload(payload: dict[str, Any]) -> str:
+    status = _email_signal(
+        payload,
+        "status",
+        "email_status",
+        "allegrowStatus",
+        "deliverability",
+        "state",
+        "sub_status",
+    ) or _nested_email_signal(
+        payload,
+        ("result", "status"),
+        ("result", "subStatus"),
+    )
+    if isinstance(status, str):
+        return status
+    for key in ("valid", "verified", "deliverable", "is_valid"):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return "valid" if value else "invalid"
+    return "unknown"
+
+
+def _safe_to_send_recommendation(status: str, payload: dict[str, Any]) -> str:
+    normalized = status.lower()
+    risky = any(
+        bool(payload.get(key))
+        for key in (
+            "disposable",
+            "honeypot",
+            "spamtrap",
+            "fraud",
+            "risky",
+            "catch_all",
+            "catchAll",
+        )
+    ) or bool(_nested_email_signal(payload, ("domain", "isCatchAll")))
+    if normalized in {"valid", "deliverable", "safe"} and not risky:
+        return "Safe to send with normal outbound throttling."
+    if normalized in {"invalid", "undeliverable", "do_not_send", "risky", "dead_email"} or risky:
+        return "Do not send until you have another verified address."
+    return "Treat as unverified; do not send at scale without another verification pass."
+
+
+def _format_email_verification_reply(email: str, tool_id: str | None, result: dict[str, Any] | None) -> str:
+    if not tool_id or not result:
+        return (
+            f"Email: {email}\n"
+            "Provider used: none\n"
+            "Status: unverified\n"
+            "Safe-to-send recommendation: Do not send until a verifier returns a result."
+        )
+
+    payload = _email_verification_payload(result)
+    status = _status_from_email_payload(payload)
+    provider = _email_signal(payload, "provider", "source", "vendor") or tool_id
+    catch_all = _email_signal(
+        payload,
+        "catch_all",
+        "catchAll",
+        "accept_all",
+    )
+    if catch_all is None:
+        catch_all = _nested_email_signal(payload, ("domain", "isCatchAll"))
+    risk = _email_signal(payload, "risk", "risk_level", "fraud_score", "disposable", "honeypot")
+    recommendation = _safe_to_send_recommendation(status, payload)
+
+    lines = [
+        f"Email: {email}",
+        f"Provider used: {tool_id}" + (f" ({provider})" if provider != tool_id else ""),
+        f"Status: {status}",
+    ]
+    if catch_all is not None:
+        lines.append(f"Catch-all signal: {catch_all}")
+    if risk is not None:
+        lines.append(f"Risk signal: {risk}")
+    lines.append(f"Safe-to-send recommendation: {recommendation}")
+    return "\n".join(lines)
+
+
+async def _execute_email_verification(
+    message: str,
+    on_attempt: Any | None = None,
+) -> tuple[str, str | None, dict[str, Any] | None]:
+    email = _email_for_verification(message)
+    if not email:
+        raise ValueError("No email verification target found")
+
+    client = get_deepline_client()
+    for tool_id in EMAIL_VERIFICATION_TOOL_IDS:
+        payload = {"email": email}
+        if on_attempt:
+            await on_attempt(tool_id, payload)
+        try:
+            result = await client.execute_tool(tool_id, payload)
+            return email, tool_id, result
+        except Exception as e:
+            logger.warning("Email verifier %s failed: %s", tool_id, e)
+    return email, None, None
+
+
+async def _collect_email_verification_reply(message: str) -> str:
+    email, tool_id, result = await _execute_email_verification(message)
+    return _format_email_verification_reply(email, tool_id, result)
+
+
+def _sse(event: dict[str, Any] | str) -> str:
+    if isinstance(event, str):
+        return f"data: {event}\n\n"
+    return f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+
+async def _stream_email_verification_reply(message: str) -> AsyncIterator[str]:
+    attempts: list[tuple[str, dict[str, Any]]] = []
+
+    async def on_attempt(tool_id: str, payload: dict[str, Any]) -> None:
+        attempts.append((tool_id, payload))
+
+    email, tool_id, result = await _execute_email_verification(message, on_attempt=on_attempt)
+    for attempted_tool_id, payload in attempts:
+        yield _sse(
+            {
+                "type": "tool-input-available",
+                "toolName": attempted_tool_id,
+                "input": payload,
+            }
+        )
+        if attempted_tool_id == tool_id and result is not None:
+            yield _sse(
+                {
+                    "type": "tool-output-available",
+                    "toolName": attempted_tool_id,
+                    "output": _compact_tool_response(result),
+                }
+            )
+
+    reply = _format_email_verification_reply(email, tool_id, result)
+    yield _sse({"type": "text-start", "id": "email_verification_result"})
+    yield _sse({"type": "text-delta", "id": "email_verification_result", "delta": reply})
+    yield _sse({"type": "text-end", "id": "email_verification_result"})
+    yield _sse({"type": "finish-step"})
+    yield _sse({"type": "finish", "finishReason": "stop"})
+    yield _sse("[DONE]")
 
 
 async def _collect_native_reply(payload: dict[str, Any]) -> str:
@@ -156,6 +541,21 @@ async def health():
     return JSONResponse(body, status_code=200 if os.environ.get("DEEPLINE_API_KEY") else 503)
 
 
+@app.get("/workflow-presets")
+async def workflow_presets():
+    """List transcript-derived starter workflows for GTM agents."""
+    return {"presets": list_workflow_presets()}
+
+
+@app.get("/workflow-presets/{preset_id}")
+async def workflow_preset(preset_id: str):
+    """Return a full workflow preset with prompt, tool bounds, and output shape."""
+    preset = get_workflow_preset(preset_id)
+    if not preset:
+        raise HTTPException(status_code=404, detail="Unknown workflow preset")
+    return preset
+
+
 @app.get("/", response_class=HTMLResponse)
 async def chat_ui():
     html_path = Path(__file__).parent / "chat.html"
@@ -166,12 +566,22 @@ async def chat_ui():
 
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 async def chat(req: ChatRequest):
-    reply = await _collect_native_reply(_chat_payload(req))
+    if _email_for_verification(req.message):
+        reply = await _collect_email_verification_reply(req.message)
+    else:
+        reply = await _collect_native_reply(_chat_payload(req))
     return ChatResponse(reply=reply, thread_id=req.thread_id)
 
 
 @app.post("/chat/stream", dependencies=[Depends(require_api_key)])
 async def chat_stream(req: ChatRequest):
+    if _email_for_verification(req.message):
+        return StreamingResponse(
+            _stream_email_verification_reply(req.message),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     payload = _chat_payload(req)
 
     async def generate() -> AsyncIterator[str]:
@@ -204,40 +614,47 @@ def _verify_slack_sig(body: bytes, timestamp: str, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-async def _slack_post(channel: str, text: str, token: str, thread_ts: str | None = None):
-    import httpx
-
-    payload = {"channel": channel, "text": text, "mrkdwn": True}
-    if thread_ts:
-        payload["thread_ts"] = thread_ts
+async def _slack_api_post(endpoint: str, payload: dict[str, Any], token: str) -> dict[str, Any]:
     async with httpx.AsyncClient() as http:
-        await http.post(
-            "https://slack.com/api/chat.postMessage",
+        resp = await http.post(
+            f"https://slack.com/api/{endpoint}",
             headers={"Authorization": f"Bearer {token}"},
             json=payload,
             timeout=10,
         )
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+
+    if resp.status_code >= 400 or not data.get("ok"):
+        detail = data.get("error") or getattr(resp, "text", "") or f"HTTP {resp.status_code}"
+        raise RuntimeError(f"Slack {endpoint} failed: {detail}")
+    return data
 
 
-async def _slack_react(channel: str, ts: str, emoji: str, token: str, remove: bool = False):
-    import httpx
+async def _slack_post(channel: str, text: str, token: str, thread_ts: str | None = None):
+    payload = {"channel": channel, "text": text, "mrkdwn": True}
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    await _slack_api_post("chat.postMessage", payload, token)
 
+
+async def _slack_react(channel: str, ts: str, emoji: str, token: str, remove: bool = False) -> bool:
     endpoint = "reactions.remove" if remove else "reactions.add"
     try:
-        async with httpx.AsyncClient() as http:
-            await http.post(
-                f"https://slack.com/api/{endpoint}",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"channel": channel, "timestamp": ts, "name": emoji},
-                timeout=10,
-            )
-    except Exception:
-        pass
+        await _slack_api_post(
+            endpoint,
+            {"channel": channel, "timestamp": ts, "name": emoji},
+            token,
+        )
+        return True
+    except Exception as e:
+        logger.warning("Slack %s failed: %s", endpoint, e)
+        return False
 
 
 async def _fetch_thread_history(channel: str, thread_ts: str, token: str, limit: int = 20) -> list[dict]:
-    import httpx
-
     try:
         async with httpx.AsyncClient() as http:
             resp = await http.get(
@@ -246,8 +663,12 @@ async def _fetch_thread_history(channel: str, thread_ts: str, token: str, limit:
                 params={"channel": channel, "ts": thread_ts, "limit": limit},
                 timeout=10,
             )
+        if resp.status_code >= 400:
+            logger.warning("Slack conversations.replies HTTP %s", resp.status_code)
+            return []
         data = resp.json()
         if not data.get("ok"):
+            logger.warning("Slack conversations.replies failed: %s", data.get("error", "unknown_error"))
             return []
         messages = []
         for msg in data.get("messages", [])[:-1]:
@@ -279,13 +700,16 @@ async def _handle_slack_event(event: dict, team_id: str):
     try:
         history = await _fetch_thread_history(channel, thread_ts, token) if event.get("thread_ts") else []
         messages = history + [{"role": "user", "content": user_text}]
-        reply = await _collect_native_reply(
-            {
-                "prompt": user_text,
-                "messages": messages,
-                "response_mode": "stream",
-            }
-        )
+        if _email_for_verification(user_text):
+            reply = await _collect_email_verification_reply(user_text)
+        else:
+            reply = await _collect_native_reply(
+                {
+                    "prompt": user_text,
+                    "messages": messages,
+                    "response_mode": "stream",
+                }
+            )
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
@@ -321,15 +745,15 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
     except json.JSONDecodeError:
         return Response(status_code=400)
 
-    if payload.get("type") == "url_verification":
-        return {"challenge": payload["challenge"]}
-
     if not _verify_slack_sig(
         body,
         request.headers.get("X-Slack-Request-Timestamp", ""),
         request.headers.get("X-Slack-Signature", ""),
     ):
         return Response(status_code=403)
+
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload["challenge"]}
 
     if payload.get("type") == "event_callback":
         event = payload.get("event", {})
@@ -387,4 +811,9 @@ async def slack_oauth_redirect(code: str = "", error: str = ""):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        log_config=UVICORN_LOG_CONFIG,
+    )
