@@ -41,6 +41,7 @@ async function main() {
     text += decoder.decode(value, { stream: true });
     if (text.includes('"type":"session.completed"') || text.includes('"type":"session.waiting"')) {
       sawCompletion = true;
+      await reader.cancel();
       break;
     }
   }
