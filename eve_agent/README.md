@@ -9,33 +9,33 @@ The existing Python/FastAPI broker remains the default runtime in the repository
 - Node.js 24
 - A Deepline API key from https://code.deepline.com
 - One model path:
-  - Vercel AI Gateway via `eve link` or `AI_GATEWAY_API_KEY`
-  - A direct provider key such as `ANTHROPIC_API_KEY`
+  - Vercel AI Gateway through `npm run link` and Vercel OIDC
+  - `AI_GATEWAY_API_KEY` for non-Vercel/static-key environments
 
 ## Configure
 
 ```bash
 cd eve_agent
 npm install
-cp .env.example .env
+npm run info
 ```
 
-Set at least:
+Set `DEEPLINE_API_KEY` in Vercel project environment variables, or in a local ignored `.env.local` for development:
 
 ```bash
 DEEPLINE_API_KEY=dlp_...
 ```
 
-For local model access, either link Eve to Vercel AI Gateway:
+Link Eve to a Vercel project and pull AI Gateway OIDC credentials:
 
 ```bash
-npx eve link
+npm run link
 ```
 
-or set a direct key supported by Eve, for example:
+For non-Vercel environments, use a static AI Gateway key instead:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+AI_GATEWAY_API_KEY=...
 EVE_MODEL=anthropic/claude-sonnet-4.6
 ```
 
@@ -57,6 +57,7 @@ The smoke script checks Eve health, creates a session, opens the session stream,
 
 ```bash
 npm test
+npm run info
 npm run typecheck
 npm run build
 ```
@@ -75,8 +76,8 @@ Eval execution requires model credentials. Without AI Gateway or a provider key,
 ```bash
 cd eve_agent
 npm install
-npx eve link
-npx vercel
+npm run link
+npm run deploy
 ```
 
 Set production environment variables in Vercel:
@@ -85,8 +86,7 @@ Set production environment variables in Vercel:
 |---|---|---|
 | `DEEPLINE_API_KEY` | Yes | Deepline v2 API key |
 | `DEEPLINE_API_BASE_URL` | Optional | Defaults to `https://code.deepline.com` |
-| `AI_GATEWAY_API_KEY` | Usually | Required unless using Vercel OIDC or another configured model path |
-| `ANTHROPIC_API_KEY` | Optional | Direct-provider local or deployed fallback |
+| `AI_GATEWAY_API_KEY` | Optional | Static fallback; Vercel OIDC is preferred |
 | `EVE_MODEL` | Optional | Overrides Eve's default model |
 
 After deployment, verify the live URL:
@@ -97,7 +97,7 @@ npm run smoke -- --host https://<your-vercel-url>
 
 ## Access Control
 
-The Eve web channel defaults to anonymous access so the reference app behaves like the current Python web chat and works immediately after deployment. For a private deployment, edit `agent/channels/eve.ts` and remove `none()` from the auth chain, or replace it with your application auth provider.
+The Eve web channel includes `none()` explicitly so the reference app behaves like the current Python web chat and works immediately after deployment. This is the Vercel-supported anonymous route-auth helper, and it should stay as the final auth entry only when public chat is intended. For a private deployment, edit `agent/channels/eve.ts` and remove `none()` from the auth chain, or replace it with your application auth provider ahead of `localDev()` and `vercelOidc()`.
 
 ## Parity Surface
 

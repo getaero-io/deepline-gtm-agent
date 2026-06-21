@@ -47,8 +47,8 @@ Use it when you want an out-of-the-box deployable agent path:
 ```bash
 cd eve_agent
 npm install
-cp .env.example .env
-# set DEEPLINE_API_KEY and model credentials
+npm run link
+# set DEEPLINE_API_KEY in Vercel env or local .env.local
 npm run dev
 npm run smoke -- --host http://127.0.0.1:3000
 ```

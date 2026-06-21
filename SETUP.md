@@ -25,10 +25,10 @@ DEEPLINE_API_KEY="dlp_..."
 Then configure model access through Vercel AI Gateway:
 
 ```bash
-npx eve link
+npm run link
 ```
 
-or set a direct provider key supported by Eve, such as `ANTHROPIC_API_KEY`.
+For non-Vercel environments, set `AI_GATEWAY_API_KEY` instead.
 
 Run locally:
 
@@ -46,7 +46,7 @@ npm run smoke -- --host http://127.0.0.1:3000
 
 ```bash
 cd eve_agent
-npx vercel
+npm run deploy
 ```
 
 Set Vercel project environment variables:
@@ -55,8 +55,7 @@ Set Vercel project environment variables:
 |---|---|---|
 | `DEEPLINE_API_KEY` | Yes | Deepline v2 API key from [code.deepline.com](https://code.deepline.com) |
 | `DEEPLINE_API_BASE_URL` | Optional | Defaults to `https://code.deepline.com` |
-| `AI_GATEWAY_API_KEY` | Usually | Required unless the deployment uses Vercel OIDC/model auth |
-| `ANTHROPIC_API_KEY` | Optional | Direct-provider fallback |
+| `AI_GATEWAY_API_KEY` | Optional | Static fallback; Vercel OIDC is preferred |
 | `EVE_MODEL` | Optional | Model override, for example `anthropic/claude-sonnet-4.6` |
 
 After deployment:
@@ -71,6 +70,7 @@ npm run smoke -- --host https://<your-vercel-url>
 ```bash
 cd eve_agent
 npm test
+npm run info
 npm run typecheck
 npm run build
 npm run eval -- smoke
@@ -78,7 +78,7 @@ npm run eval -- smoke
 
 The unit tests and build are local checks. Evals and smoke sessions require configured model credentials.
 
-The Eve web channel allows anonymous chat by default for parity with the current Python web UI. For a private deployment, remove `none()` from `eve_agent/agent/channels/eve.ts` or replace it with your own auth provider before deploying.
+The Eve web channel includes Vercel's explicit `none()` auth helper for parity with the current Python web UI. For a private deployment, remove `none()` from `eve_agent/agent/channels/eve.ts` or replace it with your own auth provider before deploying.
 
 ## Railway
 
