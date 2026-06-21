@@ -1,0 +1,31 @@
+{
+  "name": "deepline-gtm-eve-agent",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "eve dev",
+    "info": "eve info",
+    "link": "eve link",
+    "build": "eve build",
+    "start": "eve start",
+    "deploy": "eve deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "eval": "eve eval",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "ai": "latest",
+    "eve": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vercel": "^54.14.5"
+  }
+}
