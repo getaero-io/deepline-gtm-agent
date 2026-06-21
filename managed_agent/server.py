@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -69,12 +70,64 @@ UVICORN_LOG_CONFIG = {
     },
 }
 
-_API_KEY = os.environ.get("API_KEY", "")
 _bearer = HTTPBearer(auto_error=False)
+MAX_SLACK_BODY_BYTES = int(os.environ.get("MAX_SLACK_BODY_BYTES", "1048576"))
+DEFAULT_MAX_TOOL_CALLS = int(os.environ.get("DEFAULT_MAX_TOOL_CALLS", "6"))
+MAX_TOOL_CALLS_LIMIT = int(os.environ.get("MAX_TOOL_CALLS_LIMIT", "12"))
+DEFAULT_CHAT_TOOL_IDS = [
+    tool_id.strip()
+    for tool_id in os.environ.get(
+        "DEFAULT_CHAT_TOOL_IDS",
+        (
+            "deeplineagent,serper_google_search,exa_search,firecrawl_scrape,"
+            "discolike_run_company_research,exa_company_search,"
+            "limadata_find_person_profiles,allegrow_validate,leadmagic_email_validation"
+        ),
+    ).split(",")
+    if tool_id.strip()
+]
+ALLOWED_CLIENT_TOOL_IDS = {
+    tool_id.strip()
+    for tool_id in os.environ.get(
+        "ALLOWED_CLIENT_TOOL_IDS",
+        ",".join(DEFAULT_CHAT_TOOL_IDS + ["snowflake_query", "snowflake_execute_query"]),
+    ).split(",")
+    if tool_id.strip()
+}
+SLACK_SAFE_INSTRUCTIONS = """\
+Slack requests run in read-only mode by default. Do not send outreach, modify CRM
+records, enroll sequences, create external tasks, export sensitive row-level data,
+or mutate any external system. If the user asks for a side effect, draft the plan
+and ask for approval instead of taking the action.
+"""
+SLACK_DEFAULT_TOOL_IDS = [
+    tool_id.strip()
+    for tool_id in os.environ.get(
+        "SLACK_ENABLED_TOOL_IDS",
+        "deeplineagent,serper_google_search,exa_search,firecrawl_scrape",
+    ).split(",")
+    if tool_id.strip()
+]
+SLACK_MAX_TOOL_CALLS = min(
+    int(os.environ.get("SLACK_MAX_TOOL_CALLS", "4")),
+    MAX_TOOL_CALLS_LIMIT,
+)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 async def require_api_key(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    if _API_KEY and (not credentials or credentials.credentials != _API_KEY):
+    api_key = os.environ.get("API_KEY", "")
+    if not api_key:
+        if _env_flag("ALLOW_UNAUTHENTICATED", default=False):
+            return
+        raise HTTPException(status_code=503, detail="API authentication is not configured")
+    if not credentials or credentials.credentials != api_key:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
@@ -90,7 +143,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Deepline GTM Native Agent", version="2.0.0", lifespan=lifespan)
 
-_cors_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_raw = os.environ.get("CORS_ORIGINS", "")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _cors_raw.split(",") if o.strip()],
@@ -305,6 +358,24 @@ def _with_email_verification_guidance(message: str) -> str:
     return f"{EMAIL_VERIFICATION_INSTRUCTIONS}\n\nUser request:\n{message}"
 
 
+def _validate_enabled_tool_ids(tool_ids: list[str]) -> list[str]:
+    disallowed = sorted(set(tool_ids) - ALLOWED_CLIENT_TOOL_IDS)
+    if disallowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tool IDs are not allowed: {', '.join(disallowed)}",
+        )
+    return tool_ids
+
+
+def _bounded_max_tool_calls(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_MAX_TOOL_CALLS
+    if value < 0:
+        raise HTTPException(status_code=400, detail="maxToolCalls must be non-negative")
+    return min(value, MAX_TOOL_CALLS_LIMIT)
+
+
 def _chat_payload(req: ChatRequest) -> dict[str, Any]:
     if _looks_like_bulk_prospect_list(req.message):
         prompt = (
@@ -327,11 +398,13 @@ def _chat_payload(req: ChatRequest) -> dict[str, Any]:
         "prompt": prompt,
         "messages": messages,
         "response_mode": "stream",
+        "enabledToolIds": (
+            _validate_enabled_tool_ids(req.enabled_tool_ids)
+            if req.enabled_tool_ids is not None
+            else DEFAULT_CHAT_TOOL_IDS
+        ),
+        "maxToolCalls": _bounded_max_tool_calls(req.max_tool_calls),
     }
-    if req.enabled_tool_ids is not None:
-        payload["enabledToolIds"] = req.enabled_tool_ids
-    if req.max_tool_calls is not None:
-        payload["maxToolCalls"] = req.max_tool_calls
     if req.model:
         payload["model"] = req.model
     return payload
@@ -456,6 +529,26 @@ def _format_email_verification_reply(email: str, tool_id: str | None, result: di
     return "\n".join(lines)
 
 
+def _safe_email_tool_output(tool_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    payload = _email_verification_payload(result)
+    status = _status_from_email_payload(payload)
+    provider = _email_signal(payload, "provider", "source", "vendor") or tool_id
+    catch_all = _email_signal(payload, "catch_all", "catchAll", "accept_all")
+    if catch_all is None:
+        catch_all = _nested_email_signal(payload, ("domain", "isCatchAll"))
+    risk = _email_signal(payload, "risk", "risk_level", "fraud_score", "disposable", "honeypot")
+    safe_output: dict[str, Any] = {
+        "provider": provider,
+        "status": status,
+        "safe_to_send": _safe_to_send_recommendation(status, payload),
+    }
+    if catch_all is not None:
+        safe_output["catch_all"] = catch_all
+    if risk is not None:
+        safe_output["risk"] = risk
+    return safe_output
+
+
 async def _execute_email_verification(
     message: str,
     on_attempt: Any | None = None,
@@ -508,7 +601,7 @@ async def _stream_email_verification_reply(message: str) -> AsyncIterator[str]:
                 {
                     "type": "tool-output-available",
                     "toolName": attempted_tool_id,
-                    "output": _compact_tool_response(result),
+                    "output": _safe_email_tool_output(attempted_tool_id, result),
                 }
             )
 
@@ -609,9 +702,49 @@ def _verify_slack_sig(body: bytes, timestamp: str, signature: str) -> bool:
         return False
     if abs(time.time() - ts) > 300:
         return False
-    base = f"v0:{timestamp}:{body.decode()}".encode()
+    base = b"v0:" + timestamp.encode() + b":" + body
     expected = "v0=" + hmac.new(SLACK_SIGNING_SECRET.encode(), base, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+async def _read_limited_body(request: Request, max_bytes: int = MAX_SLACK_BODY_BYTES) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            raise HTTPException(status_code=413, detail="Request too large")
+    return bytes(body)
+
+
+def _csv_env_set(name: str) -> set[str]:
+    return {value.strip() for value in os.environ.get(name, "").split(",") if value.strip()}
+
+
+def _slack_event_allowed(event: dict[str, Any]) -> bool:
+    allowed_channels = _csv_env_set("SLACK_ALLOWED_CHANNEL_IDS")
+    allowed_users = _csv_env_set("SLACK_ALLOWED_USER_IDS")
+    if not allowed_channels and not allowed_users:
+        logger.warning("Ignoring Slack event because no channel or user allowlist is configured")
+        return False
+    channel = event.get("channel", "")
+    user = event.get("user", "")
+    if allowed_channels and channel not in allowed_channels:
+        return False
+    if allowed_users and user not in allowed_users:
+        return False
+    return True
+
+
+def _slack_agent_payload(user_text: str) -> dict[str, Any]:
+    base = _chat_payload(ChatRequest(message=user_text))
+    prompt = f"{SLACK_SAFE_INSTRUCTIONS}\n\n{base['prompt']}"
+    return {
+        "prompt": prompt,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_mode": "stream",
+        "enabledToolIds": SLACK_DEFAULT_TOOL_IDS,
+        "maxToolCalls": SLACK_MAX_TOOL_CALLS,
+    }
 
 
 async def _slack_api_post(endpoint: str, payload: dict[str, Any], token: str) -> dict[str, Any]:
@@ -698,18 +831,10 @@ async def _handle_slack_event(event: dict, team_id: str):
     await _slack_react(channel, message_ts, "eyes", token)
 
     try:
-        history = await _fetch_thread_history(channel, thread_ts, token) if event.get("thread_ts") else []
-        messages = history + [{"role": "user", "content": user_text}]
         if _email_for_verification(user_text):
             reply = await _collect_email_verification_reply(user_text)
         else:
-            reply = await _collect_native_reply(
-                {
-                    "prompt": user_text,
-                    "messages": messages,
-                    "response_mode": "stream",
-                }
-            )
+            reply = await _collect_native_reply(_slack_agent_payload(user_text))
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
@@ -719,7 +844,12 @@ async def _handle_slack_event(event: dict, team_id: str):
         logger.exception("Slack handler error")
         try:
             await _slack_react(channel, message_ts, "eyes", token, remove=True)
-            await _slack_post(channel, f":warning: Error: {e}", token, thread_ts)
+            await _slack_post(
+                channel,
+                ":warning: Sorry, I hit an internal error while handling that request.",
+                token,
+                thread_ts,
+            )
         except Exception:
             logger.exception("Failed to send Slack error message")
 
@@ -739,7 +869,10 @@ def _mark_seen(event_id: str) -> bool:
 
 @app.post("/slack/events")
 async def slack_events(request: Request, background_tasks: BackgroundTasks):
-    body = await request.body()
+    try:
+        body = await _read_limited_body(request)
+    except HTTPException:
+        return Response(status_code=413)
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
@@ -766,19 +899,26 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
         if event.get("bot_id") or event.get("subtype"):
             return Response(status_code=200)
         if etype == "app_mention" or (etype == "message" and ctype == "im"):
+            if not _slack_event_allowed(event):
+                return Response(status_code=200)
             background_tasks.add_task(_handle_slack_event, event, payload.get("team_id", ""))
 
     return Response(status_code=200)
 
 
 @app.get("/slack/oauth_redirect")
-async def slack_oauth_redirect(code: str = "", error: str = ""):
+async def slack_oauth_redirect(code: str = "", state: str = "", error: str = ""):
     import httpx
 
     if error:
-        return HTMLResponse(f"<h2>OAuth error: {error}</h2>", status_code=400)
+        return HTMLResponse(f"<h2>OAuth error: {html.escape(error)}</h2>", status_code=400)
     if not code:
         return HTMLResponse("<h2>Missing code</h2>", status_code=400)
+    expected_state = os.environ.get("SLACK_OAUTH_STATE", "")
+    if not expected_state:
+        return HTMLResponse("<h2>Slack OAuth is not configured</h2>", status_code=503)
+    if not state or not hmac.compare_digest(state, expected_state):
+        return HTMLResponse("<h2>Invalid OAuth state</h2>", status_code=403)
 
     client_id = os.environ.get("SLACK_CLIENT_ID", "")
     client_secret = os.environ.get("SLACK_CLIENT_SECRET", "")
@@ -793,18 +933,18 @@ async def slack_oauth_redirect(code: str = "", error: str = ""):
         )
     data = resp.json()
     if not data.get("ok"):
-        return HTMLResponse(f"<h2>OAuth failed: {data.get('error')}</h2>", status_code=400)
+        return HTMLResponse(f"<h2>OAuth failed: {html.escape(str(data.get('error')))}</h2>", status_code=400)
 
     bot_token = data.get("access_token", "")
     team_id = data.get("team", {}).get("id", "")
-    team_name = data.get("team", {}).get("name", "workspace")
+    team_name = html.escape(data.get("team", {}).get("name", "workspace"))
     if team_id and bot_token:
         _workspace_tokens[team_id] = bot_token
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><body style="font-family:system-ui;max-width:600px;margin:60px auto;padding:0 20px">
 <h2>Connected to {team_name}</h2>
-<p>Set <code>SLACK_BOT_TOKEN={bot_token}</code> in your env and redeploy.</p>
+<p>The bot token was stored for this process. Persist it in your secret manager outside this page.</p>
 </body></html>""")
 
 

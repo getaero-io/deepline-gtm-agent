@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -60,6 +61,19 @@ def test_dockerfile_preserves_managed_agent_package_for_workflow_presets():
     assert "COPY managed_agent/ ./managed_agent/" in dockerfile
 
 
+def test_dockerfile_runs_as_non_root_user():
+    dockerfile = Path("managed_agent/Dockerfile").read_text()
+
+    assert "USER app" in dockerfile
+
+
+def test_default_cors_does_not_use_wildcard():
+    source = Path("managed_agent/server.py").read_text()
+
+    assert 'os.environ.get("CORS_ORIGINS", "")' in source
+    assert 'os.environ.get("CORS_ORIGINS", "*")' not in source
+
+
 def test_health_fails_when_deepline_key_missing(monkeypatch):
     monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
 
@@ -96,7 +110,7 @@ def test_slack_url_verification_requires_valid_signature(monkeypatch):
 
     raw = json.dumps(body, separators=(",", ":")).encode()
     timestamp = str(int(time.time()))
-    base = f"v0:{timestamp}:{raw.decode()}".encode()
+    base = b"v0:" + timestamp.encode() + b":" + raw
     signature = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
 
     signed = TestClient(app).post(
@@ -111,6 +125,37 @@ def test_slack_url_verification_requires_valid_signature(monkeypatch):
 
     assert signed.status_code == 200
     assert signed.json() == {"challenge": "challenge-value"}
+
+
+def test_slack_signature_uses_raw_body_bytes(monkeypatch):
+    import managed_agent.server as server
+
+    secret = "test-signing-secret"
+    body = b'{"payload":"\xff"}'
+    timestamp = str(int(time.time()))
+    signature = "v0=" + hmac.new(
+        secret.encode(),
+        b"v0:" + timestamp.encode() + b":" + body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    monkeypatch.setattr(server, "SLACK_SIGNING_SECRET", secret)
+
+    assert server._verify_slack_sig(body, timestamp, signature) is True
+
+
+def test_slack_request_body_size_is_limited():
+    import managed_agent.server as server
+
+    class FakeRequest:
+        async def stream(self):
+            yield b"123"
+            yield b"45"
+
+    with pytest.raises(Exception) as exc:
+        asyncio.run(server._read_limited_body(FakeRequest(), max_bytes=4))
+
+    assert getattr(exc.value, "status_code", None) == 413
 
 
 def test_slack_post_raises_on_slack_api_error(monkeypatch):
@@ -279,7 +324,70 @@ def test_email_verification_requests_get_native_verifier_guidance():
     assert "leadmagic_email_validation" in content
     assert "ipqs_email_verify" not in content
     assert "john.smith@stripe.com" in content
-    assert "enabledToolIds" not in payload
+    assert payload["enabledToolIds"] == [
+        "deeplineagent",
+        "serper_google_search",
+        "exa_search",
+        "firecrawl_scrape",
+        "discolike_run_company_research",
+        "exa_company_search",
+        "limadata_find_person_profiles",
+        "allegrow_validate",
+        "leadmagic_email_validation",
+    ]
+    assert payload["maxToolCalls"] == 6
+
+
+def test_chat_payload_rejects_unallowed_tool_ids():
+    from fastapi import HTTPException
+    from managed_agent.server import ChatRequest, _chat_payload
+
+    with pytest.raises(HTTPException) as exc:
+        _chat_payload(
+            ChatRequest(
+                message="research stripe.com",
+                enabledToolIds=["hubspot_create_contact"],
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "hubspot_create_contact" in exc.value.detail
+
+
+def test_chat_payload_caps_max_tool_calls():
+    from managed_agent.server import ChatRequest, MAX_TOOL_CALLS_LIMIT, _chat_payload
+
+    payload = _chat_payload(ChatRequest(message="research stripe.com", maxToolCalls=999))
+
+    assert payload["maxToolCalls"] == MAX_TOOL_CALLS_LIMIT
+
+
+def test_chat_auth_fails_closed_when_api_key_missing(monkeypatch):
+    import managed_agent.server as server
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("ALLOW_UNAUTHENTICATED", raising=False)
+
+    response = TestClient(server.app).post("/chat", json={"message": "research stripe.com"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "API authentication is not configured"
+
+
+def test_chat_auth_can_be_explicitly_disabled_for_dev(monkeypatch):
+    import managed_agent.server as server
+
+    async def fake_collect(payload):
+        return "ok"
+
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("ALLOW_UNAUTHENTICATED", "true")
+    monkeypatch.setattr(server, "_collect_native_reply", fake_collect)
+
+    response = TestClient(server.app).post("/chat", json={"message": "research stripe.com"})
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "ok"
 
 
 def test_email_verification_chat_endpoint_executes_direct_verifier(monkeypatch):
@@ -304,9 +412,11 @@ def test_email_verification_chat_endpoint_executes_direct_verifier(monkeypatch):
 
     fake = FakeVerifierClient()
     monkeypatch.setattr(server, "get_deepline_client", lambda: fake)
+    monkeypatch.setenv("API_KEY", "test-api-key")
 
     response = TestClient(server.app).post(
         "/chat",
+        headers={"Authorization": "Bearer test-api-key"},
         json={"message": "Verify if john.smith@stripe.com is valid and safe to send to."},
     )
 
@@ -334,10 +444,12 @@ def test_email_verification_stream_emits_tool_call_for_evals(monkeypatch):
             }
 
     monkeypatch.setattr(server, "get_deepline_client", lambda: FakeVerifierClient())
+    monkeypatch.setenv("API_KEY", "test-api-key")
 
     with TestClient(server.app).stream(
         "POST",
         "/chat/stream",
+        headers={"Authorization": "Bearer test-api-key"},
         json={"message": "Verify if john.smith@stripe.com is valid and safe to send to."},
     ) as response:
         body = "".join(response.iter_text())
@@ -347,6 +459,43 @@ def test_email_verification_stream_emits_tool_call_for_evals(monkeypatch):
     assert '"toolName":"allegrow_validate"' in body
     assert '"email":"john.smith@stripe.com"' in body
     assert "Status: deliverable" in body
+
+
+def test_email_verification_stream_sanitizes_tool_output(monkeypatch):
+    import managed_agent.server as server
+
+    class FakeVerifierClient:
+        async def execute_tool(self, tool_id, payload):
+            return {
+                "status": "completed",
+                "billing": {"cost": 999},
+                "toolResponse": {
+                    "raw": {
+                        "email": payload["email"],
+                        "status": "deliverable",
+                        "provider": "UnitVerifier",
+                        "company_name": "Sensitive Customer Inc.",
+                        "request_id": "secret-request-id",
+                    }
+                },
+            }
+
+    monkeypatch.setattr(server, "get_deepline_client", lambda: FakeVerifierClient())
+    monkeypatch.setenv("API_KEY", "test-api-key")
+
+    with TestClient(server.app).stream(
+        "POST",
+        "/chat/stream",
+        headers={"Authorization": "Bearer test-api-key"},
+        json={"message": "Verify if john.smith@stripe.com is valid and safe to send to."},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "UnitVerifier" in body
+    assert "Sensitive Customer Inc." not in body
+    assert "secret-request-id" not in body
+    assert '"billing"' not in body
 
 
 def test_allegrow_email_status_and_catch_all_fields_are_formatted():
@@ -372,6 +521,79 @@ def test_allegrow_email_status_and_catch_all_fields_are_formatted():
     assert "Status: dead_email" in reply
     assert "Catch-all signal: True" in reply
     assert "Do not send" in reply
+
+
+def test_slack_event_requires_allowlisted_channel_or_user(monkeypatch):
+    import managed_agent.server as server
+
+    monkeypatch.delenv("SLACK_ALLOWED_CHANNEL_IDS", raising=False)
+    monkeypatch.delenv("SLACK_ALLOWED_USER_IDS", raising=False)
+
+    assert server._slack_event_allowed({"channel": "C123", "user": "U123"}) is False
+
+
+def test_slack_event_allows_configured_channel(monkeypatch):
+    import managed_agent.server as server
+
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNEL_IDS", "C123")
+    monkeypatch.delenv("SLACK_ALLOWED_USER_IDS", raising=False)
+
+    assert server._slack_event_allowed({"channel": "C123", "user": "U999"}) is True
+    assert server._slack_event_allowed({"channel": "C999", "user": "U999"}) is False
+
+
+def test_slack_agent_payload_is_read_only_and_bounded():
+    import managed_agent.server as server
+
+    payload = server._slack_agent_payload("Research stripe.com and add it to HubSpot")
+
+    assert payload["enabledToolIds"] == [
+        "deeplineagent",
+        "serper_google_search",
+        "exa_search",
+        "firecrawl_scrape",
+    ]
+    assert payload["maxToolCalls"] == 4
+    assert "Do not send outreach" in payload["prompt"]
+    assert "ask for approval" in payload["prompt"]
+
+
+def test_slack_oauth_requires_state_and_does_not_render_token(monkeypatch):
+    import managed_agent.server as server
+    import httpx
+
+    monkeypatch.setenv("SLACK_CLIENT_ID", "client")
+    monkeypatch.setenv("SLACK_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("SLACK_OAUTH_STATE", "expected-state")
+
+    class FakeResponse:
+        def json(self):
+            return {
+                "ok": True,
+                "access_token": "xoxb-secret-token",
+                "team": {"id": "T123", "name": "Test Workspace"},
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+    missing_state = TestClient(server.app).get("/slack/oauth_redirect?code=ok")
+    assert missing_state.status_code == 403
+
+    response = TestClient(server.app).get("/slack/oauth_redirect?code=ok&state=expected-state")
+
+    assert response.status_code == 200
+    assert "Connected to Test Workspace" in response.text
+    assert "xoxb-secret-token" not in response.text
 
 
 def test_plain_pipeline_questions_do_not_get_snowflake_guidance():
