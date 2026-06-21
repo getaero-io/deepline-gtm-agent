@@ -18,8 +18,8 @@
     "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
-    "ai": "latest",
-    "eve": "latest",
+    "ai": "^7.0.0-beta.178",
+    "eve": "^0.12.0",
     "zod": "latest"
   },
   "devDependencies": {
