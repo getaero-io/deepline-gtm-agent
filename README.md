@@ -118,20 +118,21 @@ Set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`, then DM the bot or mention it 
 Use `DEEPLINE_API_KEY` for Deepline v2 API calls. Keep API keys in environment variables or your deployment secret store.
 
 ```python
-import os
-import httpx
+import asyncio
+from deepline_gtm_agent.v2_client import DeeplineV2Client
 
-resp = httpx.post(
-    "https://code.deepline.com/api/v2/integrations/apollo_search_people/execute",
-    headers={"Authorization": f"Bearer {os.environ['DEEPLINE_API_KEY']}"},
-    json={"payload": {"job_title": "VP Sales", "limit": 5}},
-    timeout=60,
-)
-resp.raise_for_status()
-print(resp.json())
+async def main():
+    client = DeeplineV2Client()
+    result = await client.execute_tool(
+        "apollo_search_people",
+        {"job_title": "VP Sales", "limit": 5},
+    )
+    print(result)
+
+asyncio.run(main())
 ```
 
-For full chat behavior, use the v2 agent/chat SDK or API from the broker layer instead of shelling out to local CLI state.
+For full chat behavior, use the v2 agent/chat SDK or API from the broker layer.
 
 ## Deploy
 
@@ -145,13 +146,18 @@ See [SETUP.md](SETUP.md) for Railway and Slack setup. Required production variab
 | `CORS_ORIGINS` | Optional | Comma-separated allowed origins |
 | `SLACK_BOT_TOKEN` | For Slack | Slack bot token |
 | `SLACK_SIGNING_SECRET` | For Slack | Slack request signing secret |
-| `REDIS_URL` | Optional | Persistent Slack thread history |
 
 `ANTHROPIC_API_KEY`, `MANAGED_AGENT_ID`, and `MANAGED_ENVIRONMENT_ID` are only needed for the optional Anthropic Managed Agent shell in `managed_agent/setup.py`; they are not required for the default native Deepline v2 broker.
 
-## Legacy self-hosted agent
+## Migration Status
 
-The root Python package contains a legacy self-hosted agent path for local experimentation. It is not the recommended deployment path. New deployments should use the v2 native agent/chat flow above.
+The supported broker, docs, examples, and deployment path are v2-native. Use
+`DeeplineV2Client`, `/chat`, `/chat/stream`, or the managed broker for new GTM
+automation.
+
+The LangGraph/local-CLI package remains available for compatibility via lazy
+imports and optional extras (`legacy-langgraph`, `redis`). It is not installed or
+used by the default managed broker path.
 
 ## License
 

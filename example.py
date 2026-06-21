@@ -1,65 +1,36 @@
-"""
-End-to-end example: LinkedIn URL in → enriched contact + email verification out.
+"""Minimal Deepline v2 native chat example.
 
 Run with:
-    ANTHROPIC_API_KEY=... python example.py
+    DEEPLINE_API_KEY=dlp_... python example.py
 """
 
-from deepline_gtm_agent import create_gtm_agent
+from __future__ import annotations
 
-# Create the agent — defaults to Claude Opus 4.6
-agent = create_gtm_agent()
+import asyncio
 
-# ── Example 1: Enrich a single contact by LinkedIn URL ──────────────────────
-print("=" * 60)
-print("Example 1: Enrich contact from LinkedIn URL")
-print("=" * 60)
-
-result = agent.invoke({
-    "messages": [{
-        "role": "user",
-        "content": (
-            "Enrich this contact and verify their email before reporting it: "
-            "https://www.linkedin.com/in/reidhoffman/"
-        ),
-    }]
-})
-
-print(result["messages"][-1].content)
+from deepline_gtm_agent.v2_client import DeeplineV2Client, extract_text_from_stream_chunk
 
 
-# ── Example 2: Find prospects matching an ICP ────────────────────────────────
-print("\n" + "=" * 60)
-print("Example 2: Find VP of Sales prospects in SaaS, 200-500 employees")
-print("=" * 60)
+async def main() -> None:
+    client = DeeplineV2Client()
+    prompt = "Research rippling.com and summarize why it might fit a GTM data workflow."
+    parts: list[str] = []
 
-result = agent.invoke({
-    "messages": [{
-        "role": "user",
-        "content": (
-            "Find 5 VP of Sales at B2B SaaS companies with 200-500 employees "
-            "based in the United States. Return name, title, company, and LinkedIn URL."
-        ),
-    }]
-})
+    async for chunk in client.stream_agent(
+        {
+            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_mode": "stream",
+        }
+    ):
+        text = extract_text_from_stream_chunk(chunk)
+        if text:
+            print(text, end="", flush=True)
+            parts.append(text)
 
-print(result["messages"][-1].content)
+    if parts:
+        print()
 
 
-# ── Example 3: Research a target account ────────────────────────────────────
-print("\n" + "=" * 60)
-print("Example 3: Account research")
-print("=" * 60)
-
-result = agent.invoke({
-    "messages": [{
-        "role": "user",
-        "content": (
-            "Research Rippling (rippling.com). I want to know their headcount, "
-            "funding stage, tech stack, and why they might be a good fit for "
-            "a sales intelligence tool."
-        ),
-    }]
-})
-
-print(result["messages"][-1].content)
+if __name__ == "__main__":
+    asyncio.run(main())

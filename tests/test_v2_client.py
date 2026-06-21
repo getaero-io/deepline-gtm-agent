@@ -1,5 +1,6 @@
-import inspect
 import asyncio
+import json
+from types import SimpleNamespace
 
 import httpx
 
@@ -75,12 +76,83 @@ def test_extract_text_from_native_stream_chunks():
     assert extract_text_from_stream_chunk(chunk) == "hello world"
 
 
-def test_legacy_deepline_execute_is_v2_only():
+def test_legacy_deepline_execute_preserves_cli_fallback_without_api_key(monkeypatch):
     import deepline_gtm_agent.deepline as deepline
 
-    source = inspect.getsource(deepline)
-    assert "subprocess" not in source
-    assert "/api/v2/integrations/{operation}/execute" not in source
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "completed", "toolResponse": {"ok": True}}),
+            stderr="",
+        )
+
+    monkeypatch.delenv("DEEPLINE_API_KEY", raising=False)
+    monkeypatch.setattr(deepline.subprocess, "run", fake_run)
+
+    result = deepline.deepline_execute("hunter_email_finder", {"domain": "acme.com"})
+
+    assert seen["cmd"] == [
+        "deepline",
+        "tools",
+        "execute",
+        "hunter_email_finder",
+        "--input",
+        '{"domain": "acme.com"}',
+        "--json",
+    ]
+    assert seen["kwargs"]["capture_output"] is True
+    assert result["toolResponse"]["ok"] is True
+
+
+def test_legacy_deepline_execute_prefers_v2_sdk_with_api_key(monkeypatch):
+    import deepline_gtm_agent.deepline as deepline
+
+    class FakeClient:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        async def execute_tool(self, operation, payload, include_tool_metadata=False):
+            return {
+                "operation": operation,
+                "payload": payload,
+                "include_tool_metadata": include_tool_metadata,
+                "base_url": self.base_url,
+            }
+
+    def fail_cli(*args, **kwargs):
+        raise AssertionError("DEEPLINE_API_KEY should keep deepline_execute on the v2 SDK path")
+
+    monkeypatch.setenv("DEEPLINE_API_KEY", "dl_test")
+    monkeypatch.setattr(deepline, "DeeplineV2Client", FakeClient)
+    monkeypatch.setattr(deepline.subprocess, "run", fail_cli)
+
+    result = deepline.deepline_execute("hunter_email_finder", {"domain": "acme.com"})
+
+    assert result["operation"] == "hunter_email_finder"
+    assert result["payload"] == {"domain": "acme.com"}
+    assert result["include_tool_metadata"] is True
+
+
+def test_top_level_package_defaults_to_v2_with_lazy_legacy_compatibility():
+    import deepline_gtm_agent
+
+    assert deepline_gtm_agent.__all__ == ["DeeplineV2Client", "create_gtm_agent"]
+    assert hasattr(deepline_gtm_agent, "DeeplineV2Client")
+    assert callable(deepline_gtm_agent.create_gtm_agent)
+
+
+def test_public_example_uses_native_v2_client():
+    from pathlib import Path
+
+    source = Path("example.py").read_text()
+
+    assert "DeeplineV2Client" in source
+    assert "create_gtm_agent" not in source
+    assert "agent.invoke" not in source
 
 
 def test_native_stream_tool_calls_are_captured_for_evals():
