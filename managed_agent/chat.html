@@ -55,6 +55,11 @@ async function send(){
   addMsg('Starting session...','status');
   try{
     const res=await fetch('/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text})});
+    if(!res.ok){
+      let detail='Request failed: HTTP '+res.status;
+      try{const err=await res.json();if(err.detail)detail+=' - '+err.detail}catch{}
+      throw new Error(detail);
+    }
     const reader=res.body.getReader();const dec=new TextDecoder();let buf='';
     while(true){
       const{done,value}=await reader.read();if(done)break;
@@ -72,7 +77,10 @@ async function send(){
         }catch{}
       }
     }
-  }catch(e){addMsg('Error: '+e.message,'status')}
+  }catch(e){
+    if(!agentEl.textContent)agentEl.remove();
+    addMsg('Error: '+e.message,'status')
+  }
   btn.disabled=false;input.focus();
 }
 </script>

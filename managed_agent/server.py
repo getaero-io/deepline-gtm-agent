@@ -703,13 +703,7 @@ async def _handle_slack_event(event: dict, team_id: str):
         if _email_for_verification(user_text):
             reply = await _collect_email_verification_reply(user_text)
         else:
-            reply = await _collect_native_reply(
-                {
-                    "prompt": user_text,
-                    "messages": messages,
-                    "response_mode": "stream",
-                }
-            )
+            reply = await _collect_native_reply(_chat_payload(ChatRequest(message=user_text, messages=messages)))
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"

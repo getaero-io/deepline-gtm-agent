@@ -43,6 +43,19 @@ def test_managed_agent_does_not_upload_cli_or_auth_files():
     assert "NODE_TLS_REJECT_UNAUTHORIZED=0" not in combined
 
 
+def test_project_metadata_keeps_legacy_langgraph_out_of_default_dependencies():
+    import tomllib
+
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+    dependencies = pyproject["project"]["dependencies"]
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
+
+    assert all("deepagents" not in dependency for dependency in dependencies)
+    assert all("langchain-" not in dependency for dependency in dependencies)
+    assert "legacy-langgraph" in optional_dependencies
+    assert "redis" in optional_dependencies
+
+
 def test_server_logging_is_configured_for_stdout_on_railway():
     source = Path("managed_agent/server.py").read_text()
     root_source = Path("server.py").read_text()
@@ -141,6 +154,94 @@ def test_slack_post_raises_on_slack_api_error(monkeypatch):
         assert "channel_not_found" in str(exc)
     else:
         raise AssertionError("_slack_post should raise on Slack ok:false")
+
+
+def test_slack_events_use_same_v2_guidance_as_rest(monkeypatch):
+    import managed_agent.server as server
+
+    seen = {}
+    posts = []
+
+    async def fake_collect(payload):
+        seen["payload"] = payload
+        return "ok"
+
+    async def fake_react(*args, **kwargs):
+        return True
+
+    async def fake_post(channel, text, token, thread_ts=None):
+        posts.append((channel, text, token, thread_ts))
+
+    monkeypatch.setattr(server, "SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(server, "_collect_native_reply", fake_collect)
+    monkeypatch.setattr(server, "_slack_react", fake_react)
+    monkeypatch.setattr(server, "_slack_post", fake_post)
+
+    asyncio.run(
+        server._handle_slack_event(
+            {
+                "channel": "C123",
+                "text": "<@U123> Build a CSV prospect list of 20 VP Engineering contacts at AI infrastructure companies.",
+                "ts": "1710000000.000100",
+            },
+            "T123",
+        )
+    )
+
+    assert seen["payload"]["prompt"].startswith("Bulk prospect/list requests")
+    assert "native v2 list-building workflow" in seen["payload"]["prompt"]
+    assert posts == [("C123", "ok", "xoxb-test", "1710000000.000100")]
+
+
+def test_slack_thread_history_is_preserved_for_plain_messages(monkeypatch):
+    import managed_agent.server as server
+
+    seen = {}
+
+    async def fake_history(channel, thread_ts, token, limit=20):
+        return [{"role": "user", "content": "Earlier context"}]
+
+    async def fake_collect(payload):
+        seen["payload"] = payload
+        return "ok"
+
+    async def fake_react(*args, **kwargs):
+        return True
+
+    async def fake_post(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(server, "SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setattr(server, "_fetch_thread_history", fake_history)
+    monkeypatch.setattr(server, "_collect_native_reply", fake_collect)
+    monkeypatch.setattr(server, "_slack_react", fake_react)
+    monkeypatch.setattr(server, "_slack_post", fake_post)
+
+    asyncio.run(
+        server._handle_slack_event(
+            {
+                "channel": "C123",
+                "text": "Find the LinkedIn URL for Jensen Huang at NVIDIA.",
+                "ts": "1710000000.000200",
+                "thread_ts": "1710000000.000100",
+            },
+            "T123",
+        )
+    )
+
+    assert seen["payload"]["prompt"] == "Find the LinkedIn URL for Jensen Huang at NVIDIA."
+    assert seen["payload"]["messages"] == [
+        {"role": "user", "content": "Earlier context"},
+        {"role": "user", "content": "Find the LinkedIn URL for Jensen Huang at NVIDIA."},
+    ]
+
+
+def test_chat_ui_reports_stream_http_errors():
+    source = Path("managed_agent/chat.html").read_text()
+
+    assert "if(!res.ok)" in source
+    assert "err.detail" in source
+    assert "agentEl.remove()" in source
 
 
 def test_bulk_prospect_requests_get_native_v2_list_guidance():

@@ -1,6 +1,7 @@
 # Setup Guide
 
 This guide deploys the Deepline v2 native agent/chat broker. It uses environment variables and the Deepline SDK/API, with no dependency on local Deepline CLI state.
+The legacy LangGraph/local-CLI package is still available for compatibility, but it is not part of the default Railway deployment path.
 
 ## Railway
 
@@ -34,13 +35,6 @@ railway up --detach
 2. Railway builds with `managed_agent/Dockerfile`.
 3. Add `DEEPLINE_API_KEY` and `PORT=8000` in the service variables.
 4. Generate a public domain under **Settings** -> **Networking**.
-
-## Redis
-
-Redis is optional. Add it if you want Slack thread history to survive deploys and restarts.
-
-1. Railway dashboard -> your project -> **New** -> **Database** -> **Add Redis**.
-2. Railway sets `REDIS_URL` automatically.
 
 ## Slack
 
@@ -103,7 +97,6 @@ If `API_KEY` is set, include:
 | `PORT` | Yes | Server port, usually `8000` |
 | `API_KEY` | Optional | Protects `/chat` endpoints with bearer auth |
 | `CORS_ORIGINS` | Optional | Comma-separated allowed origins; defaults to `*` |
-| `REDIS_URL` | Optional | Enables persistent Slack conversation history |
 | `SLACK_BOT_TOKEN` | For Slack | Bot token from Slack OAuth |
 | `SLACK_SIGNING_SECRET` | For Slack | Slack signing secret |
 | `SLACK_CLIENT_ID` | Optional | Used by Slack OAuth install flow |
