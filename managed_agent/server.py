@@ -831,10 +831,14 @@ async def _handle_slack_event(event: dict, team_id: str):
     await _slack_react(channel, message_ts, "eyes", token)
 
     try:
+        history = await _fetch_thread_history(channel, thread_ts, token) if event.get("thread_ts") else []
         if _email_for_verification(user_text):
             reply = await _collect_email_verification_reply(user_text)
         else:
-            reply = await _collect_native_reply(_slack_agent_payload(user_text))
+            payload = _slack_agent_payload(user_text)
+            if history:
+                payload["messages"] = history + [{"role": "user", "content": payload["prompt"]}]
+            reply = await _collect_native_reply(payload)
 
         await _slack_react(channel, message_ts, "eyes", token, remove=True)
         slack_reply = md_to_slack(reply) if reply else "(no response)"
