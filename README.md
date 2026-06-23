@@ -38,6 +38,23 @@ The agent handles common GTM workflows with Deepline's v2 tool catalog and API:
 
 Responses should include sources, provider outcomes, and a clear next step. The agent should state data gaps instead of inventing missing emails, titles, or company facts.
 
+## Eve reference implementation
+
+This repo now includes an additive Eve reference implementation in [`eve_agent/`](eve_agent/). It preserves the Deepline v2 execution backend while using Eve for durable sessions, local HTTP, evals, and fast Vercel deployment.
+
+Use it when you want an out-of-the-box deployable agent path:
+
+```bash
+cd eve_agent
+npm install
+npm run link
+# set DEEPLINE_API_KEY in Vercel env or local .env.local
+npm run dev
+npm run smoke -- --host http://127.0.0.1:3000
+```
+
+See [`eve_agent/README.md`](eve_agent/README.md) for the full local, eval, and Vercel flow.
+
 ## Architecture
 
 ```
@@ -148,6 +165,8 @@ See [SETUP.md](SETUP.md) for Railway and Slack setup. Required production variab
 | `REDIS_URL` | Optional | Persistent Slack thread history |
 
 `ANTHROPIC_API_KEY`, `MANAGED_AGENT_ID`, and `MANAGED_ENVIRONMENT_ID` are only needed for the optional Anthropic Managed Agent shell in `managed_agent/setup.py`; they are not required for the default native Deepline v2 broker.
+
+For the Eve on Vercel path, see [`eve_agent/README.md`](eve_agent/README.md) and the Vercel section in [SETUP.md](SETUP.md).
 
 ## Legacy self-hosted agent
 

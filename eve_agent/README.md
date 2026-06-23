@@ -1,0 +1,112 @@
+# Deepline GTM Eve Agent
+
+Eve reference implementation for the Deepline GTM agent. This app keeps Deepline as the GTM execution backend and uses Eve for durable agent sessions, local development, evals, and Vercel deployment.
+
+The existing Python/FastAPI broker remains the default runtime in the repository. Use this package when you want the faster Eve deployment path or want to validate Deepline GTM behavior through Eve evals.
+
+## Requirements
+
+- Node.js 24
+- A Deepline API key from https://code.deepline.com
+- One model path:
+  - Vercel AI Gateway through `npm run link` and Vercel OIDC
+  - `AI_GATEWAY_API_KEY` for non-Vercel/static-key environments
+
+## Configure
+
+```bash
+cd eve_agent
+npm install
+npm run info
+```
+
+Set `DEEPLINE_API_KEY` in Vercel project environment variables, or in a local ignored `.env.local` for development:
+
+```bash
+DEEPLINE_API_KEY=dlp_...
+```
+
+Link Eve to a Vercel project and pull AI Gateway OIDC credentials:
+
+```bash
+npm run link
+```
+
+For non-Vercel environments, use a static AI Gateway key instead:
+
+```bash
+AI_GATEWAY_API_KEY=...
+EVE_MODEL=anthropic/claude-sonnet-4.6
+```
+
+## Run Locally
+
+```bash
+npm run dev
+```
+
+Eve serves the local agent over HTTP. In another terminal, run:
+
+```bash
+npm run smoke -- --host http://127.0.0.1:3000
+```
+
+The smoke script checks Eve health, creates a session, opens the session stream, and waits for a completed or waiting event.
+
+## Test
+
+```bash
+npm test
+npm run info
+npm run typecheck
+npm run build
+```
+
+Run deterministic evals with:
+
+```bash
+npm run eval -- smoke
+npm run eval -- workflow-presets
+```
+
+Eval execution requires model credentials. Without AI Gateway or a provider key, Eve will compile but model-backed evals will fail at runtime.
+
+## Deploy To Vercel
+
+```bash
+cd eve_agent
+npm install
+npm run link
+npm run deploy
+```
+
+Set production environment variables in Vercel:
+
+| Variable | Required | Description |
+|---|---|---|
+| `DEEPLINE_API_KEY` | Yes | Deepline v2 API key |
+| `DEEPLINE_API_BASE_URL` | Optional | Defaults to `https://code.deepline.com` |
+| `AI_GATEWAY_API_KEY` | Optional | Static fallback; Vercel OIDC is preferred |
+| `EVE_MODEL` | Optional | Overrides Eve's default model |
+
+After deployment, verify the live URL:
+
+```bash
+npm run smoke -- --host https://<your-vercel-url>
+```
+
+## Access Control
+
+The Eve web channel includes `none()` explicitly so the reference app behaves like the current Python web chat and works immediately after deployment. This is the Vercel-supported anonymous route-auth helper, and it should stay as the final auth entry only when public chat is intended. For a private deployment, edit `agent/channels/eve.ts` and remove `none()` from the auth chain, or replace it with your application auth provider ahead of `localDev()` and `vercelOidc()`.
+
+## Parity Surface
+
+The Eve port preserves the important Deepline GTM behavior:
+
+- full Deepline v2 agent/chat streaming through the `deepline_chat` tool
+- direct Deepline v2 tool execution through `deepline_execute_tool`
+- GTM guidance around evidence, uncertainty, CRM safety, and bounded action
+- workflow presets for enrichment, account digests, support, web research, bounded tool action, closed-loop GTM, and Snowflake query agents
+- deterministic eval coverage for smoke behavior, workflow presets, enrichment guidance, account research, and approval rules
+
+Slack remains on the Python broker for now. The Eve package is structured so an Eve Slack channel can be added later without blocking the faster Vercel deployment path.
