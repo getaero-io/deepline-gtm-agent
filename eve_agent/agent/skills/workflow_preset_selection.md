@@ -14,6 +14,10 @@ Use the workflow preset tools to select a repeatable GTM workflow. Shared Deepli
 4. Explain required inputs, slot defaults, tool bounds, approval gates, and expected output.
 5. Recommend the smallest pilot that proves the workflow before scaling it.
 
+When listing presets, include each exact preset `id` next to its title. Do not
+replace IDs with title-only labels; users need copyable IDs such as
+`web_context_research` and `snowflake_query_agent` for follow-up requests.
+
 ## Selection Heuristics
 
 - Contact/list work: enrichment or bounded tool action presets
