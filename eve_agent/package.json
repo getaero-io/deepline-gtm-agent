@@ -15,7 +15,12 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts",
     "eval": "eve eval",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "sync:recipes": "tsx scripts/sync-deepline-recipes.ts",
+    "sync:skills": "tsx scripts/sync-deepline-skills.ts",
+    "sync:deepline": "npm run sync:skills",
+    "check:skills": "tsx scripts/sync-deepline-skills.ts --check",
+    "check:deepline": "npm run check:skills"
   },
   "dependencies": {
     "ai": "latest",
