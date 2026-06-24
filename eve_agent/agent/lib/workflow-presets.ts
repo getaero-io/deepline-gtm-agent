@@ -1,18 +1,41 @@
+import recipesData from "./deepline-recipes.js";
+
 export interface WorkflowPreset {
   title: string;
-  speaker_pattern: string;
-  why: string;
+  source?: "deepline-api-recipe" | "legacy-transcript-preset";
+  speaker_pattern?: string;
+  why?: string;
   best_for: string[];
   prompt: string;
   suggested_tool_bounds: Record<string, unknown>;
   expected_output: string[];
   human_approval_required_for: string[];
+  difficulty?: string;
+  group?: string;
+  slot_defaults?: Record<string, string>;
+  no_skip_suffix?: boolean;
 }
 
 export type WorkflowPresetWithId = WorkflowPreset & { id: string };
 
-export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
+interface DeeplineRecipe {
+  id: string;
+  title: string;
+  difficulty?: string;
+  group?: string;
+  promptTemplate: string;
+  noSkipSuffix?: boolean;
+  slotDefaults?: Record<string, string>;
+}
+
+const SHARED_RECIPES = recipesData as unknown as {
+  skipSuffix: string;
+  recipes: DeeplineRecipe[];
+};
+
+export const LEGACY_WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
   inbound_lead_approval: {
+    source: "legacy-transcript-preset",
     title: "Inbound lead research + rep approval",
     speaker_pattern: "LangChain / Vishnu Suresh",
     why: "A lead should not go straight from CRM to outreach. The agent should research, check reasons not to act, draft with sources, and route to a rep for approval.",
@@ -43,6 +66,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   account_digest: {
+    source: "legacy-transcript-preset",
     title: "Weekly account intelligence digest",
     speaker_pattern: "LangChain / Vishnu Suresh",
     why: "Reps with 80+ accounts need a ranked Monday digest, not another tab. The agent should combine CRM, product usage, web events, and meeting signals into the top actions for the week.",
@@ -72,6 +96,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   self_serve_support_agent: {
+    source: "legacy-transcript-preset",
     title: "Self-serve support and onboarding agent",
     speaker_pattern: "AssemblyAI / Matt Lawler",
     why: "Support/onboarding agents need current markdown docs, fast retrieval, visible progress, escalation rules, and a feedback loop into docs and product experience.",
@@ -101,6 +126,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   web_context_research: {
+    source: "legacy-transcript-preset",
     title: "Agent-native web context research",
     speaker_pattern: "Exa / Scott Langille",
     why: "Search should return workflow-ready claims, not a pile of links. The agent needs extracted facts, source URLs, freshness, confidence, and a recommended next action.",
@@ -132,6 +158,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   bounded_tool_action: {
+    source: "legacy-transcript-preset",
     title: "Scoped tool/action workflow",
     speaker_pattern: "Composio / Sujay Choubey",
     why: "The useful part of tool access is not the number of integrations. It is discovery, auth, scopes, execution boundaries, audit trails, and revocation.",
@@ -163,6 +190,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   closed_loop_gtm_workflow: {
+    source: "legacy-transcript-preset",
     title: "Closed-loop GTM workflow",
     speaker_pattern: "Deepline / Jai Toor",
     why: "The useful loop is context, action, insight. Combine first-party and third-party context, take an approved action, then store what happened so the next run improves.",
@@ -194,6 +222,7 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
     ],
   },
   snowflake_query_agent: {
+    source: "legacy-transcript-preset",
     title: "Snowflake query agent",
     speaker_pattern: "LangChain / Vishnu Suresh + Deepline / Jai Toor",
     why: "Transcript-derived GTM agents worked better when trusted business context landed in a warehouse and the agent could answer qualitative questions with SQL-like access. This preset keeps that power read-only, scoped, and explainable.",
@@ -235,12 +264,20 @@ export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
   },
 };
 
+export const WORKFLOW_PRESETS: Record<string, WorkflowPreset> = {
+  ...Object.fromEntries(
+    SHARED_RECIPES.recipes.map((recipe) => [recipe.id, workflowPresetFromRecipe(recipe)]),
+  ),
+  ...LEGACY_WORKFLOW_PRESETS,
+};
+
 export function listWorkflowPresets(): Array<
-  Pick<WorkflowPresetWithId, "id" | "title" | "speaker_pattern" | "best_for">
+  Pick<WorkflowPresetWithId, "id" | "title" | "source" | "speaker_pattern" | "best_for">
 > {
   return Object.entries(WORKFLOW_PRESETS).map(([id, preset]) => ({
     id,
     title: preset.title,
+    source: preset.source,
     speaker_pattern: preset.speaker_pattern,
     best_for: preset.best_for,
   }));
@@ -249,4 +286,41 @@ export function listWorkflowPresets(): Array<
 export function getWorkflowPreset(id: string): WorkflowPresetWithId | null {
   const preset = WORKFLOW_PRESETS[id];
   return preset ? { id, ...preset } : null;
+}
+
+function workflowPresetFromRecipe(recipe: DeeplineRecipe): WorkflowPreset {
+  const skipNote = recipe.noSkipSuffix
+    ? "Recipe runs exactly as templated; no quickstart suffix is added."
+    : `Recipe appends the shared quickstart suffix: ${SHARED_RECIPES.skipSuffix}`;
+
+  return {
+    source: "deepline-api-recipe",
+    title: recipe.title,
+    difficulty: recipe.difficulty,
+    group: recipe.group,
+    best_for: [recipe.group ?? "recipe", recipe.difficulty ?? "workflow"],
+    prompt: recipe.promptTemplate,
+    suggested_tool_bounds: {
+      use_shared_deepline_recipe: true,
+      recipe_id: recipe.id,
+      side_effects_require_approval: true,
+    },
+    expected_output: [
+      "recipe prompt template",
+      "required slot defaults",
+      "Deepline execution result",
+      "provider/tool gaps",
+      "approval question before side effects",
+    ],
+    human_approval_required_for: [
+      "full-list enrichment beyond the recipe sample",
+      "CRM writeback",
+      "outreach send",
+      "sequence enrollment",
+      "sensitive data export",
+    ],
+    slot_defaults: recipe.slotDefaults ?? {},
+    no_skip_suffix: Boolean(recipe.noSkipSuffix),
+    why: skipNote,
+  };
 }

@@ -2,7 +2,7 @@ import { defineEval } from "eve/evals";
 import { includes } from "eve/evals/expect";
 
 export default defineEval({
-  description: "Specialized GTM requests load the relevant Eve playbook skill before answering.",
+  description: "Specialized GTM requests load the relevant Eve or copied Deepline skill before answering.",
   tags: ["skills", "parity"],
   timeoutMs: 240_000,
   async test(t) {

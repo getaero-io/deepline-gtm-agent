@@ -71,6 +71,37 @@ npm run eval -- workflow-presets
 
 Eval execution requires model credentials. Without AI Gateway or a provider key, Eve will compile but model-backed evals will fail at runtime.
 
+## Shared Deepline Recipes And Skills
+
+Reusable GTM recipes should come from `deepline-api`, not from hand-written Eve-only copies. The Eve package vendors a committed generated snapshot of `deepline-api/src/lib/onboard/recipes.json` at `agent/lib/deepline-recipes.ts` so local installs and Vercel deploys work without a second repo checkout.
+
+Reusable agent skills should also come from Deepline's published well-known skills API. The Eve package copies the built well-known skill packages from `https://code.deepline.com/.well-known/skills/index.json` into `agent/skills/<skill-name>/`, preserving `SKILL.md`, `references/`, `scripts`, metadata, and recipe wrappers. The sync strips only frontmatter fields Eve does not accept, such as `disable-model-invocation`.
+
+The generated skill snapshot is locked in `agent/lib/deepline-skills-lock.ts`. The lock records the source index URL, published index version, generated timestamp, skill file list, and SHA-256 hash for every copied file.
+
+To refresh copied skills from the published API:
+
+```bash
+cd eve_agent
+npm run sync:deepline
+```
+
+To verify the committed snapshot is still current without mutating files:
+
+```bash
+npm run check:deepline
+```
+
+To sync from a staging API instead, point the script at a different well-known index:
+
+```bash
+DEEPLINE_SKILLS_INDEX_URL=https://staging.example.com/.well-known/skills/index.json npm run sync:deepline
+```
+
+The workflow preset tools expose shared recipes with `source: deepline-api-recipe`. Legacy transcript-derived presets remain available with `source: legacy-transcript-preset` for agent patterns that are not onboarding recipes yet.
+
+Do not edit copied skill packages directly in Eve. Update and publish the Deepline API well-known skill artifacts, run `npm run sync:deepline`, then run the Eve tests. Recipe prompts are currently committed as a generated snapshot; refresh them only with an explicit `DEEPLINE_RECIPES_JSON_URL` or `DEEPLINE_RECIPES_JSON_PATH`.
+
 ## Deploy To Vercel
 
 ```bash

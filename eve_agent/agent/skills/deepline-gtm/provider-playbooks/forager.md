@@ -1,0 +1,36 @@
+# Forager Workflow Guidance
+
+Forager has 850M+ B2B person records and is especially strong for verified mobile phone numbers (200M+ database). Prefer Forager over other providers when the goal is phone number discovery.
+
+## Search & Discovery
+
+- Always start with totals operations (`forager_person_role_search_totals`, `forager_organization_search_totals`, `forager_job_search_totals`) to estimate result volume at zero credit cost before running paid searches.
+- Use `forager_person_role_search` for prospecting by role, skills, and company criteria. Each page costs 1 credit.
+- Use `forager_organization_search` for company prospecting by industry, size, technology stack, and revenue filters.
+- Use `forager_job_search` for intent-signal analysis: companies hiring for specific roles indicate growth and budget in those areas.
+
+## Boolean Text Search
+
+- Fields like `role_title`, `role_description`, `person_name`, `organization_description` use boolean text search.
+- **Multi-word phrases MUST be quoted**: `'"VP Sales"'` not `'VP Sales'`. Unquoted phrases cause a parse error.
+- Supports AND, OR, NOT, and parentheses: `("VP Sales" OR "Director of Sales") NOT intern`
+
+## Filter Fields Use Integer IDs
+
+- `person_locations`, `person_skills`, `person_industries`, `organization_locations`, etc. all require **integer IDs**, not name strings.
+- Retrieve IDs from the lookup operations first (e.g. `forager_industries`, `forager_locations`, `forager_person_skills`).
+
+## Enrichment & Reveals
+
+Use `forager_person_detail_lookup` to enrich a known person by `person_id` or `linkedin_public_identifier`.
+Use `forager_person_detail_reverse_lookup_by_email` when you already know a work/personal email and want to resolve the person.
+
+- Use `forager_person_detail_reverse_lookup_by_phone_number` when you already know a phone number and want to resolve the person.
+- Use `forager_website_detail_lookup` for technographic enrichment on a specific domain.
+- API docs: https://docs.forager.ai/openapi/api_keys
+
+## Cross-Provider Workflow Tips
+
+- When building name-dependent workflows (e.g. email pattern generation), start from a source that returns full names before using Forager for phone/email reveals.
+- Forager person search results include `person_id` -- save this for subsequent `forager_person_detail_lookup` calls to avoid re-searching.
+- Check account balance from Forager before large batch operations.
